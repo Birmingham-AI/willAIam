@@ -1,14 +1,24 @@
-import ollama
 import fitz  # PyMuPDF
 import json
 import time
 import os
 from pathlib import Path
+from os import getenv
+from os.path import join, dirname
+
+from dotenv import load_dotenv
+from openai import OpenAI
+
+# Load environment variables
+load_dotenv(join(dirname(dirname(__file__)), ".env"))
+
+OPENAI_API_KEY = getenv("OPENAI_API_KEY")
+client = OpenAI(api_key=OPENAI_API_KEY)
 
 # Configuration
 SLIDES_DIR = "slides"
 OUTPUT_DIR = "sources"
-MODEL = "gemma3:4b"
+MODEL = "gpt-4o-mini"
 
 # The Prompt
 PROMPT_TEXT = """
@@ -51,10 +61,10 @@ def process_slides(pdf_path):
 
                 print(f"  Processing Page {page_num}...", end=" ", flush=True)
 
-                # Call Ollama
-                response = ollama.chat(
+                # Call OpenAI API
+                response = client.chat.completions.create(
                     model=MODEL,
-                    format='json',  # Enforce JSON mode
+                    response_format={"type": "json_object"},  # Enforce JSON mode
                     messages=[
                         {
                             'role': 'system',
@@ -69,7 +79,7 @@ def process_slides(pdf_path):
 
                 # Parse JSON content
                 try:
-                    content = json.loads(response['message']['content'])
+                    content = json.loads(response.choices[0].message.content)
                     
                     # Extract text from analysis for compatibility with embed.py
                     # Combine slide title and key points into a single text field
@@ -128,13 +138,6 @@ def main():
         return
     
     print(f"Found {len(pdf_files)} PDF file(s) to process\n")
-    
-    # PRO TIP: Warm up the model once before processing all PDFs
-    # We send an empty request to force Ollama to load the model into VRAM 
-    # before we start the loop. This makes the first slide processing instant.
-    print(f"Warming up {MODEL}...")
-    ollama.generate(model=MODEL, prompt="") 
-    print("Model loaded. Starting processing...\n")
     
     total_slides = 0
     
