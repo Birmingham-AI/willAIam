@@ -3,8 +3,11 @@ from dotenv import load_dotenv
 from os.path import join, dirname
 from os import getenv
 from openai import OpenAI
+from openai.types.responses import ResponseTextDeltaEvent
+from agents import Agent, Runner, set_tracing_disabled
 import numpy as np
 import sys
+import asyncio
 from pathlib import Path
 import re
 from typing import List, Dict
@@ -12,6 +15,9 @@ from typing import List, Dict
 sys.stdout.reconfigure(encoding='utf-8')
 
 load_dotenv(join(dirname(dirname(__file__)), ".env"))
+
+# Disable tracing for ZDR (Zero Data Retention) organizations
+set_tracing_disabled(True)
 
 OPENAI_API_KEY = getenv("OPENAI_API_KEY")
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -77,10 +83,11 @@ def search_meeting_notes(query, top_k=5):
     return results[:top_k]
 
 
-def synthesize_answer(question: str, results: List[Dict]) -> str:
-    """Use GPT to craft a conversational answer grounded in retrieved notes."""
+async def synthesize_answer_streaming(question: str, results: List[Dict]) -> None:
+    """Use OpenAI Agents SDK to stream a conversational answer grounded in retrieved notes."""
     if not results:
-        return "I couldn't find anything in the meeting notes that answers that yet."
+        print("I couldn't find anything in the meeting notes that answers that yet.")
+        return
 
     context_lines = []
     for idx, result in enumerate(results, start=1):
@@ -89,7 +96,7 @@ def synthesize_answer(question: str, results: List[Dict]) -> str:
             f"Summary: {result['text']}"
         )
 
-    system_prompt = (
+    instructions = (
         "You read meeting-note snippets and answer the user's question. "
         "Be conversational but concise. Cite the year and month whenever you "
         "mention a supporting point (format 'Discussed in YEAR/MONTH'). If the "
@@ -100,24 +107,31 @@ def synthesize_answer(question: str, results: List[Dict]) -> str:
         f"Question: {question}\n\nRelevant notes:\n" + "\n\n".join(context_lines)
     )
 
-    completion = client.chat.completions.create(
+    # Create agent with instructions
+    agent = Agent(
+        name="MeetingNotesAssistant",
+        instructions=instructions,
         model="gpt-4o-mini",
-        temperature=0.2,
-        messages=[
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": user_content},
-        ],
     )
 
-    return completion.choices[0].message.content.strip()
+    # Run agent in streaming mode
+    result = Runner.run_streamed(agent, input=user_content)
 
-# Main execution
-if __name__ == "__main__":
+    # Stream token-by-token output
+    async for event in result.stream_events():
+        if event.type == "raw_response_event" and isinstance(event.data, ResponseTextDeltaEvent):
+            print(event.data.delta, end="", flush=True)
+
+    # Add newline after streaming completes
+    print()
+
+async def main():
+    """Main async function to handle the Q&A flow with streaming."""
     print("Meeting Notes Search")
     print("=" * 50)
-    
+
     query = input("\nEnter your question: ")
-    
+
     print(f"\nSearching for: {query}\n")
     try:
         results = search_meeting_notes(query)
@@ -125,11 +139,11 @@ if __name__ == "__main__":
         print(str(exc))
         raise SystemExit(1)
 
-    answer = synthesize_answer(query, results)
-
     print("Answer:")
     print("-" * 50)
-    print(answer)
+
+    # Stream the answer
+    await synthesize_answer_streaming(query, results)
 
     print("\nSupporting results:")
     print("-" * 50)
@@ -139,4 +153,8 @@ if __name__ == "__main__":
         print(f"   Year: {result['year']}")
         print(f"   Month: {result['month']}")
         print(f"   Text: {result['text']}")
+
+# Main execution
+if __name__ == "__main__":
+    asyncio.run(main())
 

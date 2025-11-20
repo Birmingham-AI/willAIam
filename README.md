@@ -18,7 +18,7 @@ Internal RAG playground for answering **“has this topic been talked about?”*
 
 3. **Install Python dependencies**
    ```bash
-   py -m pip install -r requirements.txt
+   py -m pip install -r backend/requirements.txt
    ```
 
 4. **Configure secrets**
@@ -29,7 +29,7 @@ Internal RAG playground for answering **“has this topic been talked about?”*
    - Place PDF files in the `slides/` directory.
    - Process them to extract key points:
      ```bash
-     py -m actions.process_slides
+     py -m backend.actions.process_slides
      ```
    - This creates JSON files in `sources/` (one per PDF) with slide analysis.
 
@@ -37,42 +37,52 @@ Internal RAG playground for answering **“has this topic been talked about?”*
    - Drop the latest meeting notes into `sources/{year}-{month}-meeting.json`, or use the JSON files generated from slide processing.
    - Embed them:
      ```bash
-     py -m actions.embed --year 2025 --month 10 --notes-file sources/2025-10-meeting.json
+     py -m backend.actions.embed --year 2025 --month 10 --notes-file sources/2025-10-meeting.json
      ```
    - Bundle (creates/updates `embeddings/bundled/bundle-{n}.json`):
      ```bash
-     py -m actions.bundle
+     py -m backend.actions.bundle
      ```
 
-7. **Ask a question**
+7. **Ask a question (CLI or API)**
    ```bash
-   py -m actions.ask
+   # CLI version
+   py -m backend.actions.ask
+
+   # Or run the API server
+   docker-compose up -d
+   # Then visit http://localhost:8000/docs
    ```
    Enter your prompt when asked; the tool returns a conversational answer plus the supporting rows.
 
 ## Project Structure
 
-- `slides/` – PDF slide decks to process.
-- `sources/` – raw meeting notes (`{year}-{month}-meeting.json`) and processed slide JSON files.
-- `actions/process_slides.py` – processes PDF files from `slides/` directory, extracts key points using OpenAI (`gpt-4o-mini`), and saves JSON to `sources/`.
-- `actions/embed.py` – CLI to embed a notes file and save to `embeddings/`.
-- `embeddings/` – per-meeting embedding JSON (`{year}-{month}-meeting-embed.json`).
-- `actions/bundle.py` – gathers all per-meeting files and writes `embeddings/bundled/bundle-{n}.json`.
-- `actions/ask.py` – CLI search assistant that answers a question and cites where/when it was addressed.
-- `embed_meeting_notes.py` – legacy helper if you need the older flow.
+- `backend/` – All backend code (API, data processing, CLI)
+  - `app.py` – FastAPI application with REST endpoints
+  - `services/` – RAG service logic
+  - `actions/` – Data processing scripts
+    - `process_slides.py` – PDF processing
+    - `embed.py` – Embedding generation
+    - `bundle.py` – Embedding bundler
+    - `ask.py` – CLI interface
+- `slides/` – PDF slide decks to process
+- `sources/` – Raw meeting notes and processed slide JSON files
+- `embeddings/` – Generated embeddings and bundled files
+- `docker-compose.yml` – Run backend as containerized service
 
 ## Prerequisites
 
 - **Python 3.12+** (repo was built/tested with `py` launcher on Windows).
-- `pip install -r requirements.txt` installs everything needed (`pandas`, `python-dotenv`, `numpy`, `openai`, `ollama`, `PyMuPDF`).
-- `.env` in the repo root with `OPENAI_API_KEY=...` (for for embedding, search, and slide processing).
+- `pip install -r backend/requirements.txt` installs everything needed (`pandas`, `python-dotenv`, `numpy`, `openai`, `openai-agents`, `PyMuPDF`, `fastapi`, `uvicorn`).
+- `.env` in the repo root with `OPENAI_API_KEY=...` (for embedding, search, and slide processing).
+- **Docker & Docker Compose** (optional, for containerized deployment)
 
 ## Typical Workflow
 
 1. **Process slide PDFs (optional)**
 
    ```bash
-   py -m actions.process_slides
+   py -m backend.actions.process_slides
    ```
 
    - Processes all PDF files in the `slides/` directory.
@@ -84,7 +94,7 @@ Internal RAG playground for answering **“has this topic been talked about?”*
 2. **Embed a meeting's notes**
 
    ```bash
-   py -m actions.embed --year 2025 --month 10 --notes-file sources/2025-10-meeting.json \
+   py -m backend.actions.embed --year 2025 --month 10 --notes-file sources/2025-10-meeting.json \
        --point-summary  # optional flag for per-point vs per-slide embeddings
    ```
 
@@ -95,21 +105,28 @@ Internal RAG playground for answering **“has this topic been talked about?”*
 3. **Bundle embeddings for search**
 
    ```bash
-   py -m actions.bundle
+   py -m backend.actions.bundle
    ```
 
    - Reads every `embeddings/*-meeting-embed.json` file.
    - Adds `year` and `month` into each record.
    - Writes `embeddings/bundled/bundle-{n}.json`, where `n` increments based on the highest existing bundled file (so deletions won't cause overwrites).
 
-4. **Ask questions**
+4. **Ask questions (CLI or API)**
 
+   **CLI:**
    ```bash
-   py -m actions.ask
+   py -m backend.actions.ask
    ```
-
    - Prompts for a question, embeds it, finds the top matches from the latest bundle, then crafts a conversational answer (citing `YEAR/MONTH`) and lists the supporting rows with similarity scores.
-   - If no bundled file exists, it reminds you to run the bundler first.
+
+   **API:**
+   ```bash
+   docker-compose up -d
+   ```
+   - Starts FastAPI backend at http://localhost:8000
+   - Interactive docs at http://localhost:8000/docs
+   - Supports both streaming and non-streaming endpoints
 
 ## Data Expectations
 
