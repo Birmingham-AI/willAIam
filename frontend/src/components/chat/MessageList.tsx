@@ -21,7 +21,7 @@ const MessageList: React.FC<MessageListProps> = ({ messages, isLoading }) => {
   }, [messages]);
 
   return (
-    <div className="p-6 pb-4 w-full max-w-4xl mx-auto">
+    <div className="p-6 pb-4 w-full max-w-6xl mx-auto">
       {messages.length === 0 && !isLoading ? (
         <div className="flex flex-col items-center justify-center h-full text-center py-12">
           <Bot className="w-16 h-16 text-gray-300 mb-4" />
@@ -74,8 +74,8 @@ const MessageList: React.FC<MessageListProps> = ({ messages, isLoading }) => {
             </div>
           ))}
 
-          {/* Loading Indicator */}
-          {isLoading && (
+          {/* Loading Indicator - only show if loading and last message is not assistant (i.e., waiting for first chunk) */}
+          {isLoading && messages.length > 0 && messages[messages.length - 1].type !== 'assistant' && (
             <div className="flex items-start gap-3 flex-row">
               <div className="flex-shrink-0 w-8 h-8 rounded-full bg-purple-500 flex items-center justify-center">
                 <Bot className="w-5 h-5 text-white" />

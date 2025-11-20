@@ -1,4 +1,4 @@
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import MessageList from './MessageList';
 import MessageInput from './MessageInput';
 import { ChatMessage } from '../../types/chat';
@@ -10,15 +10,26 @@ interface ChatContainerProps {
   selectedModel?: string;
 }
 
+const STORAGE_KEY = 'willaim_conversation_history';
+
 /**
  * Main container component for the chat interface
- * Simple single-session chat with no persistence
+ * Conversation history persisted in localStorage
  */
 const ChatContainer: React.FC<ChatContainerProps> = ({ selectedModel = 'gpt-4o-mini' }) => {
-  const [messages, setMessages] = useState<ChatMessage[]>([]);
+  // Load messages from localStorage on mount
+  const [messages, setMessages] = useState<ChatMessage[]>(() => {
+    const stored = localStorage.getItem(STORAGE_KEY);
+    return stored ? JSON.parse(stored) : [];
+  });
   const [inputMessage, setInputMessage] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const abortControllerRef = useRef<AbortController | null>(null);
+
+  // Save messages to localStorage whenever they change
+  useEffect(() => {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(messages));
+  }, [messages]);
 
   const handleSendMessage = async (enableWebSearch: boolean = true) => {
     if (!inputMessage.trim() || isLoading) return;
@@ -38,11 +49,18 @@ const ChatContainer: React.FC<ChatContainerProps> = ({ selectedModel = 'gpt-4o-m
     // Create assistant message ID
     const assistantMessageId = (Date.now() + 1).toString();
 
+    // Build conversation history for backend (excluding the current user message)
+    const conversationHistory = messages.map(msg => ({
+      role: msg.type === 'user' ? 'user' : 'assistant',
+      content: msg.content
+    }));
+
     try {
       // Use streaming API
       abortControllerRef.current = apiService.streamMessage(
         currentInput,
         enableWebSearch,
+        conversationHistory,
         // On chunk received
         (chunk: string) => {
           setMessages(prev => {
@@ -108,6 +126,8 @@ const ChatContainer: React.FC<ChatContainerProps> = ({ selectedModel = 'gpt-4o-m
     setMessages([]);
     setInputMessage('');
     setIsLoading(false);
+    // Clear conversation history from localStorage
+    localStorage.removeItem(STORAGE_KEY);
   };
 
   const cancelStreaming = () => {
@@ -119,7 +139,7 @@ const ChatContainer: React.FC<ChatContainerProps> = ({ selectedModel = 'gpt-4o-m
   };
 
   return (
-    <div className="flex h-full bg-white overflow-hidden w-full max-w-full">
+    <div className="flex h-full bg-white/70 backdrop-blur-sm overflow-hidden w-full max-w-full">
       {/* Main Chat Area */}
       <div className="flex-1 flex flex-col h-full overflow-hidden">
         {/* Messages */}

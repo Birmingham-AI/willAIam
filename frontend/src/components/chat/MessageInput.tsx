@@ -23,7 +23,7 @@ const MessageInput: React.FC<MessageInputProps> = ({
 
   return (
     <div className="p-4 pb-6">
-      <div className="mx-auto max-w-4xl">
+      <div className="mx-auto max-w-6xl">
         <div className="flex items-center gap-2 w-full">
           <div className="flex-1 flex items-center bg-white rounded-full border border-gray-200 shadow-lg hover:shadow-xl transition-shadow px-4 py-1.5">
             {/* Web Search Toggle Icon */}

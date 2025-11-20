@@ -1,8 +1,7 @@
-import axios from 'axios';
 import config from '../config';
 
 /**
- * Simple API service for chat - no persistence
+ * Simple API service for chat with conversation memory
  */
 class ApiService {
   private baseURL: string;
@@ -12,27 +11,12 @@ class ApiService {
   }
 
   /**
-   * Send a message and get streaming response
-   */
-  async sendMessage(message: string): Promise<string> {
-    try {
-      const response = await axios.post(`${this.baseURL}/api/ask`, {
-        question: message
-      });
-
-      return response.data.answer || '';
-    } catch (error) {
-      console.error('Error sending message:', error);
-      throw error;
-    }
-  }
-
-  /**
    * Send a message and get streaming response (SSE)
    */
   streamMessage(
     message: string,
     enableWebSearch: boolean,
+    conversationHistory: Array<{ role: string; content: string }>,
     onChunk: (chunk: string) => void,
     onComplete: () => void,
     onError: (error: Error) => void
@@ -46,6 +30,7 @@ class ApiService {
       },
       body: JSON.stringify({
         question: message,
+        messages: conversationHistory,
         enable_web_search: enableWebSearch
       }),
       signal: abortController.signal,

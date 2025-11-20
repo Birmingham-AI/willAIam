@@ -28,6 +28,7 @@ rag_service = RAGService()
 
 class QuestionRequest(BaseModel):
     question: str
+    messages: Optional[List[Dict[str, str]]] = []
     enable_web_search: Optional[bool] = True
 
 
@@ -64,6 +65,7 @@ async def ask_question(request: QuestionRequest):
 
     Request body:
     - question: The question to ask
+    - messages: Optional conversation history [{"role": "user/assistant", "content": "..."}]
     - enable_web_search: Whether to allow web search (default: True)
 
     Returns:
@@ -77,8 +79,8 @@ async def ask_question(request: QuestionRequest):
         )
 
         async def generate():
-            # Stream the answer from the agent
-            async for chunk in agent.stream_answer(request.question):
+            # Stream the answer from the agent with conversation history
+            async for chunk in agent.stream_answer(request.question, request.messages):
                 yield f"data: {chunk}\n\n"
 
             # Send completion marker

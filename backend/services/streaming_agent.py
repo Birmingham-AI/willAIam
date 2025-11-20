@@ -69,12 +69,13 @@ class StreamingMeetingNotesAgent:
 
         return search_meeting_notes
 
-    async def stream_answer(self, question: str) -> AsyncGenerator[str, None]:
+    async def stream_answer(self, question: str, messages: list = None) -> AsyncGenerator[str, None]:
         """
         Stream a conversational answer to a question
 
         Args:
             question: The user's question
+            messages: Optional conversation history as list of {"role": "user/assistant", "content": "..."}
 
         Yields:
             Text chunks as they are generated
@@ -86,14 +87,25 @@ class StreamingMeetingNotesAgent:
         if self.enable_web_search:
             tools.append(WebSearchTool())
 
+        # Build instructions with conversation history injected
+        instructions = self.instructions
+        if messages and len(messages) > 0:
+            # Inject conversation history into instructions for context
+            history_text = "\n\nConversation history:\n"
+            for msg in messages[-10:]:  # Keep last 10 messages to avoid token limits
+                role = msg.get("role", "unknown")
+                content = msg.get("content", "")
+                history_text += f"{role.capitalize()}: {content}\n"
+            instructions = self.instructions + history_text
+
         agent = Agent(
             name="MeetingNotesAssistant",
-            instructions=self.instructions,
+            instructions=instructions,
             model=self.model,
             tools=tools,
         )
 
-        # Run agent in streaming mode
+        # Run agent with current question
         result = Runner.run_streamed(agent, input=question)
 
         # Stream token-by-token output
