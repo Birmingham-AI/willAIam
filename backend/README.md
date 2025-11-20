@@ -19,43 +19,22 @@ Returns service status and version.
 }
 ```
 
-### Ask Question (Non-Streaming)
+### Ask Question (Streaming with Agent)
 ```bash
 POST /api/ask
 Content-Type: application/json
 
 {
   "question": "What topics were discussed about AI agents?",
-  "top_k": 5
+  "enable_web_search": true  // optional, default: true
 }
 ```
 
-**Response**:
-```json
-{
-  "answer": "AI agents were discussed in 2025/09...",
-  "results": [
-    {
-      "slide": 1,
-      "year": 2025,
-      "month": 9,
-      "text": "Introduction to AI Agents...",
-      "score": 0.8542
-    }
-  ]
-}
-```
-
-### Ask Question (Streaming)
-```bash
-POST /api/ask/stream
-Content-Type: application/json
-
-{
-  "question": "What topics were discussed about AI agents?",
-  "top_k": 5
-}
-```
+The agent will:
+1. Search meeting notes using the RAGService tool
+2. Optionally search the web for additional context (if enabled)
+3. Synthesize a comprehensive answer with citations
+4. Stream the response in real-time
 
 **Response**: Server-Sent Events (SSE) stream
 ```

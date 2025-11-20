@@ -3,19 +3,13 @@ from dotenv import load_dotenv
 from os.path import join, dirname
 from os import getenv
 from openai import OpenAI
-from openai.types.responses import ResponseTextDeltaEvent
-from agents import Agent, Runner, set_tracing_disabled
 import numpy as np
 from pathlib import Path
 import re
-from typing import List, Dict, AsyncGenerator
-import json
+from typing import List, Dict
 
 # Load environment variables
 load_dotenv(join(dirname(dirname(dirname(__file__))), ".env"))
-
-# Disable tracing for ZDR (Zero Data Retention) organizations
-set_tracing_disabled(True)
 
 OPENAI_API_KEY = getenv("OPENAI_API_KEY")
 
@@ -34,7 +28,7 @@ BUNDLE_FILE_PATTERN = re.compile(r"^bundle-(\d+)\.json$")
 
 
 class RAGService:
-    """Service for RAG operations: search and answer synthesis"""
+    """Service for RAG operations: embedding and search"""
 
     def __init__(self):
         self.client = OpenAI(api_key=OPENAI_API_KEY)
@@ -95,97 +89,3 @@ class RAGService:
 
         return results[:top_k]
 
-    async def synthesize_answer_streaming(
-        self, question: str, results: List[Dict]
-    ) -> AsyncGenerator[str, None]:
-        """
-        Stream a conversational answer using OpenAI Agents SDK
-
-        Args:
-            question: The user's question
-            results: Search results from vector similarity
-
-        Yields:
-            Text chunks as they are generated
-        """
-        if not results:
-            yield "I couldn't find anything in the meeting notes that answers that yet."
-            return
-
-        context_lines = []
-        for idx, result in enumerate(results, start=1):
-            context_lines.append(
-                f"{idx}. Year: {result['year']}, Month: {result['month']}, Slide: {result['slide']}\n"
-                f"Summary: {result['text']}"
-            )
-
-        instructions = (
-            "You read meeting-note snippets and answer the user's question. "
-            "Be conversational but concise. Cite the year and month whenever you "
-            "mention a supporting point (format 'Discussed in YEAR/MONTH'). If the "
-            "notes don't address the question, say that plainly."
-        )
-
-        user_content = (
-            f"Question: {question}\n\nRelevant notes:\n" + "\n\n".join(context_lines)
-        )
-
-        # Create agent with instructions
-        agent = Agent(
-            name="MeetingNotesAssistant",
-            instructions=instructions,
-            model="gpt-4o-mini",
-        )
-
-        # Run agent in streaming mode
-        result = Runner.run_streamed(agent, input=user_content)
-
-        # Stream token-by-token output
-        async for event in result.stream_events():
-            if event.type == "raw_response_event" and isinstance(event.data, ResponseTextDeltaEvent):
-                yield event.data.delta
-
-    async def synthesize_answer_non_streaming(
-        self, question: str, results: List[Dict]
-    ) -> str:
-        """
-        Generate a conversational answer without streaming (for REST API)
-
-        Args:
-            question: The user's question
-            results: Search results from vector similarity
-
-        Returns:
-            Complete answer as a string
-        """
-        if not results:
-            return "I couldn't find anything in the meeting notes that answers that yet."
-
-        context_lines = []
-        for idx, result in enumerate(results, start=1):
-            context_lines.append(
-                f"{idx}. Year: {result['year']}, Month: {result['month']}, Slide: {result['slide']}\n"
-                f"Summary: {result['text']}"
-            )
-
-        system_prompt = (
-            "You read meeting-note snippets and answer the user's question. "
-            "Be conversational but concise. Cite the year and month whenever you "
-            "mention a supporting point (format 'Discussed in YEAR/MONTH'). If the "
-            "notes don't address the question, say that plainly."
-        )
-
-        user_content = (
-            f"Question: {question}\n\nRelevant notes:\n" + "\n\n".join(context_lines)
-        )
-
-        completion = self.client.chat.completions.create(
-            model="gpt-4o-mini",
-            temperature=0.2,
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_content},
-            ],
-        )
-
-        return completion.choices[0].message.content.strip()

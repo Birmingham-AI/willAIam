@@ -5,6 +5,7 @@ from pydantic import BaseModel
 from typing import List, Dict, Optional
 
 from services.rag_service import RAGService
+from services.streaming_agent import StreamingMeetingNotesAgent
 
 app = FastAPI(
     title="willAIam Backend API",
@@ -21,13 +22,13 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Initialize RAG service
+# Initialize RAG service (agent created per-request to allow web search toggle)
 rag_service = RAGService()
 
 
 class QuestionRequest(BaseModel):
     question: str
-    top_k: Optional[int] = 5
+    enable_web_search: Optional[bool] = True
 
 
 class SearchResult(BaseModel):
@@ -56,48 +57,28 @@ async def root():
 @app.post("/api/ask")
 async def ask_question(request: QuestionRequest):
     """
-    Ask a question and get a non-streaming response with supporting results.
-
-    Request body:
-    - question: The question to ask
-    - top_k: Number of top results to return (default: 5)
-
-    Returns:
-    - answer: The synthesized answer
-    - results: Supporting search results with similarity scores
-    """
-    try:
-        results = rag_service.search_meeting_notes(request.question, request.top_k)
-        answer = await rag_service.synthesize_answer_non_streaming(request.question, results)
-
-        return QuestionResponse(
-            answer=answer,
-            results=[SearchResult(**result) for result in results]
-        )
-    except FileNotFoundError as e:
-        raise HTTPException(status_code=404, detail=str(e))
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
-
-
-@app.post("/api/ask/stream")
-async def ask_question_stream(request: QuestionRequest):
-    """
     Ask a question and get a streaming response.
 
+    The agent will use RAGService as a tool to search meeting notes and
+    optionally use web search for additional context.
+
     Request body:
     - question: The question to ask
-    - top_k: Number of top results to return (default: 5)
+    - enable_web_search: Whether to allow web search (default: True)
 
     Returns:
-    Server-Sent Events stream with the answer followed by supporting results
+    Server-Sent Events stream with the answer
     """
     try:
-        results = rag_service.search_meeting_notes(request.question, request.top_k)
+        # Create agent with requested configuration
+        agent = StreamingMeetingNotesAgent(
+            rag_service,
+            enable_web_search=request.enable_web_search
+        )
 
         async def generate():
-            # Stream the answer
-            async for chunk in rag_service.synthesize_answer_streaming(request.question, results):
+            # Stream the answer from the agent
+            async for chunk in agent.stream_answer(request.question):
                 yield f"data: {chunk}\n\n"
 
             # Send completion marker
