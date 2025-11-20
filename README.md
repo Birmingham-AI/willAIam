@@ -4,7 +4,7 @@ Internal RAG playground for answering **"has this topic been talked about?"** fr
 
 ## Demo
 
-![demo](demo.gif)
+<img src="demo.gif" width="800" />
 
 ## Quick Start
 
