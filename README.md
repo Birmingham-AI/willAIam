@@ -22,9 +22,16 @@ Internal RAG playground for answering **"has this topic been talked about?"** fr
      ```
 
 3. **Start the application**
+  For docker:
    ```bash
    docker-compose up -d
    ```
+
+  For podman:
+   ```bash
+   python -m podman_compose up -d
+   ```
+
    - Frontend: http://localhost:5174
    - Backend API: http://localhost:8001
    - API docs: http://localhost:8001/docs
