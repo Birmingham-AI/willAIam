@@ -7,3 +7,4 @@ PyMuPDF==1.26.6
 fastapi==0.121.3
 uvicorn[standard]==0.38.0
 requests==2.32.5
+youtube-transcript-api==1.2.3

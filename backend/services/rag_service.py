@@ -46,7 +46,7 @@ class RAGService:
 
     def get_embedding(self, text: str) -> List[float]:
         """Get embedding for a text string"""
-        resp = self.client.embeddings.create(model="text-embedding-3-large", input=text)
+        resp = self.client.embeddings.create(model="text-embedding-3-small", input=text)
         return resp.data[0].embedding
 
     def cosine_similarity(self, vec1: List[float], vec2: List[float]) -> float:
