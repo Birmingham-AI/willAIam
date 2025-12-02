@@ -117,7 +117,8 @@ class YouTubeTranscriber:
         self,
         url: str,
         session_info: str,
-        output_filename: str = None
+        output_filename: str = None,
+        save_local: bool = True
     ) -> list[dict]:
         """
         Transcribe YouTube video and create embeddings directly.
@@ -126,6 +127,7 @@ class YouTubeTranscriber:
             url: YouTube video URL or video ID
             session_info: Description of the session
             output_filename: Optional custom output filename
+            save_local: Whether to save JSON file locally (default: True)
 
         Returns:
             List of embedded chunks
@@ -200,20 +202,22 @@ class YouTubeTranscriber:
             })
             print("Done")
 
-        # Save to embeddings directory
-        if output_filename is None:
-            output_filename = f"youtube-{video_id}.json"
+        # Save to embeddings directory (optional)
+        if save_local:
+            if output_filename is None:
+                output_filename = f"youtube-{video_id}.json"
 
-        if not output_filename.endswith('.json'):
-            output_filename += '.json'
+            if not output_filename.endswith('.json'):
+                output_filename += '.json'
 
-        output_path = os.path.join(EMBEDDINGS_DIR, output_filename)
-        os.makedirs(EMBEDDINGS_DIR, exist_ok=True)
+            output_path = os.path.join(EMBEDDINGS_DIR, output_filename)
+            os.makedirs(EMBEDDINGS_DIR, exist_ok=True)
 
-        with open(output_path, 'w', encoding='utf-8') as f:
-            json.dump(embedded_chunks, f, indent=2, ensure_ascii=False)
+            with open(output_path, 'w', encoding='utf-8') as f:
+                json.dump(embedded_chunks, f, indent=2, ensure_ascii=False)
 
-        print(f"\nSaved to: {output_path}")
+            print(f"\nSaved to: {output_path}")
+
         print(f"Total chunks: {len(embedded_chunks)}")
 
         return embedded_chunks
@@ -259,6 +263,11 @@ def main():
         default=YouTubeTranscriber.DEFAULT_OVERLAP,
         help=f"Sentences to overlap (default: {YouTubeTranscriber.DEFAULT_OVERLAP})"
     )
+    parser.add_argument(
+        "--no-save",
+        action="store_true",
+        help="Skip saving JSON file locally (useful when uploading directly to Supabase)"
+    )
 
     args = parser.parse_args()
 
@@ -268,7 +277,7 @@ def main():
             overlap=args.overlap,
             language=args.lang
         )
-        transcriber.transcribe(args.url, args.session, args.output)
+        transcriber.transcribe(args.url, args.session, args.output, save_local=not args.no_save)
     except Exception as e:
         print(f"Error: {e}")
         raise SystemExit(1)

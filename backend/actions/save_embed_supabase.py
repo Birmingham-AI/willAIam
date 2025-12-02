@@ -47,10 +47,10 @@ def save_to_supabase(url: str, session_info: str) -> None:
         print(f"Already processed, skipping: {video_id}")
         return
 
-    # Transcribe and embed
+    # Transcribe and embed (skip local JSON file by default)
     print(f"Processing YouTube video: {video_id}")
     transcriber = YouTubeTranscriber()
-    chunks = transcriber.transcribe(url, session_info)
+    chunks = transcriber.transcribe(url, session_info, save_local=False)
 
     # Insert source record
     source_result = supabase.table("sources").insert({
