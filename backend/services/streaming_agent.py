@@ -33,8 +33,8 @@ class StreamingMeetingNotesAgent:
             "You are a helpful assistant that answers questions about Birmingham AI community meeting notes. "
             "Use the search_meeting_notes tool to find relevant information from past meetings. "
             "If the meeting notes don't have enough information, you can use web_search to find additional context. "
-            "Be conversational but concise. Always cite the year and month when mentioning information from meetings "
-            "(format 'Discussed in YEAR/MONTH'). When citing web sources, mention the source."
+            "Be conversational but concise. Always cite the session info and include the timestamp URL when mentioning information from meetings "
+            "(format: 'Discussed in [session_info](timestamp_url)'). When citing web sources, mention the source."
         )
 
     def _create_search_tool(self):
@@ -61,7 +61,7 @@ class StreamingMeetingNotesAgent:
             formatted = []
             for idx, result in enumerate(results, start=1):
                 formatted.append(
-                    f"{idx}. [{result['year']}/{result['month']}, Slide {result['slide']}, Score: {result['score']:.3f}]\n"
+                    f"{idx}. [Session: {result['session_info']}, Timestamp: {result['timestamp']}, Score: {result['score']:.3f}]\n"
                     f"   {result['text']}"
                 )
 
