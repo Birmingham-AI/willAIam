@@ -19,16 +19,15 @@ import asyncio
 import json
 import os
 import re
-from os import getenv
 from os.path import join, dirname
 
 from dotenv import load_dotenv
-from openai import AsyncOpenAI
 from youtube_transcript_api import YouTubeTranscriptApi
 
-# Load environment variables
+# Load environment variables (for CLI usage)
 load_dotenv(join(dirname(dirname(dirname(__file__))), ".env"))
-OPENAI_API_KEY = getenv("OPENAI_API_KEY")
+
+from clients import get_embedding
 
 EMBEDDINGS_DIR = "embeddings"
 
@@ -50,7 +49,6 @@ class YouTubeTranscriber:
         self.overlap = overlap
         self.language = language
         self._api = YouTubeTranscriptApi()
-        self._openai = AsyncOpenAI(api_key=OPENAI_API_KEY)
 
     @staticmethod
     def extract_video_id(url: str) -> str | None:
@@ -107,12 +105,8 @@ class YouTubeTranscriber:
         return [s.strip() for s in sentences if s.strip()]
 
     async def _get_embedding(self, text: str) -> list[float]:
-        """Get embedding for text using OpenAI."""
-        resp = await self._openai.embeddings.create(
-            model="text-embedding-3-small",
-            input=text
-        )
-        return resp.data[0].embedding
+        """Get embedding for text using shared OpenAI client."""
+        return await get_embedding(text)
 
     async def transcribe(
         self,
