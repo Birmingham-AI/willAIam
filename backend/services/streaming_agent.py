@@ -39,9 +39,10 @@ class StreamingMeetingNotesAgent:
 
     def _create_search_tool(self):
         """Create the search tool function for the agent"""
+        rag_service = self.rag_service
 
         @function_tool
-        def search_meeting_notes(query: str, top_k: int = 5) -> str:
+        async def search_meeting_notes(query: str, top_k: int = 5) -> str:
             """
             Search meeting notes for relevant information.
 
@@ -52,7 +53,7 @@ class StreamingMeetingNotesAgent:
             Returns:
                 Formatted search results with year, month, slide, and content
             """
-            results = self.rag_service.search_meeting_notes(query, top_k)
+            results = await rag_service.search_meeting_notes(query, top_k)
 
             if not results:
                 return "No relevant meeting notes found for this query."

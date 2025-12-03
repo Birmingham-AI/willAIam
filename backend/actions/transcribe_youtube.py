@@ -8,13 +8,14 @@ Usage (Python):
     from backend.actions.transcribe_youtube import YouTubeTranscriber
 
     transcriber = YouTubeTranscriber()
-    result = transcriber.transcribe("VIDEO_URL", session_info="Nov 2024 Birmingham AI Meetup")
+    result = await transcriber.transcribe("VIDEO_URL", session_info="Nov 2024 Birmingham AI Meetup")
 
     # Custom settings (overlap is number of sentences)
     transcriber = YouTubeTranscriber(chunk_size=800, overlap=2)
 """
 
 import argparse
+import asyncio
 import json
 import os
 import re
@@ -22,7 +23,7 @@ from os import getenv
 from os.path import join, dirname
 
 from dotenv import load_dotenv
-from openai import OpenAI
+from openai import AsyncOpenAI
 from youtube_transcript_api import YouTubeTranscriptApi
 
 # Load environment variables
@@ -49,7 +50,7 @@ class YouTubeTranscriber:
         self.overlap = overlap
         self.language = language
         self._api = YouTubeTranscriptApi()
-        self._openai = OpenAI(api_key=OPENAI_API_KEY)
+        self._openai = AsyncOpenAI(api_key=OPENAI_API_KEY)
 
     @staticmethod
     def extract_video_id(url: str) -> str | None:
@@ -105,15 +106,15 @@ class YouTubeTranscriber:
         sentences = re.split(pattern, text)
         return [s.strip() for s in sentences if s.strip()]
 
-    def _get_embedding(self, text: str) -> list[float]:
+    async def _get_embedding(self, text: str) -> list[float]:
         """Get embedding for text using OpenAI."""
-        resp = self._openai.embeddings.create(
+        resp = await self._openai.embeddings.create(
             model="text-embedding-3-small",
             input=text
         )
         return resp.data[0].embedding
 
-    def transcribe(
+    async def transcribe(
         self,
         url: str,
         session_info: str,
@@ -161,7 +162,7 @@ class YouTubeTranscriber:
                 start_seconds = int(start_time)
 
                 print(f"  Embedding chunk {chunk_index + 1}...", end=" ", flush=True)
-                embedding = self._get_embedding(chunk_text)
+                embedding = await self._get_embedding(chunk_text)
 
                 embedded_chunks.append({
                     "session_info": session_info,
@@ -192,7 +193,7 @@ class YouTubeTranscriber:
             start_seconds = int(start_time)
 
             print(f"  Embedding chunk {chunk_index + 1}...", end=" ", flush=True)
-            embedding = self._get_embedding(chunk_text)
+            embedding = await self._get_embedding(chunk_text)
 
             embedded_chunks.append({
                 "session_info": session_info,
@@ -223,7 +224,7 @@ class YouTubeTranscriber:
         return embedded_chunks
 
 
-def main():
+async def async_main():
     parser = argparse.ArgumentParser(
         description="Transcribe YouTube videos and create embeddings for RAG"
     )
@@ -277,10 +278,14 @@ def main():
             overlap=args.overlap,
             language=args.lang
         )
-        transcriber.transcribe(args.url, args.session, args.output, save_local=not args.no_save)
+        await transcriber.transcribe(args.url, args.session, args.output, save_local=not args.no_save)
     except Exception as e:
         print(f"Error: {e}")
         raise SystemExit(1)
+
+
+def main():
+    asyncio.run(async_main())
 
 
 if __name__ == "__main__":

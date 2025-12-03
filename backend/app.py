@@ -1,14 +1,15 @@
+import asyncio
 import uuid
 import logging
 from os import getenv
 
-from fastapi import FastAPI, HTTPException, BackgroundTasks
+from fastapi import FastAPI, HTTPException
 from fastapi.responses import StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import List, Dict, Optional
 from dotenv import load_dotenv
-from supabase import create_client
+from supabase._async.client import create_client as create_async_client, AsyncClient
 
 from services.rag_service import RAGService
 from services.streaming_agent import StreamingMeetingNotesAgent
@@ -18,7 +19,7 @@ from actions.transcribe_youtube import YouTubeTranscriber
 load_dotenv()
 
 # Configure logging
-logging.basicConfig(level=logging.DEBUG)
+logging.basicConfig(level=logging.WARNING)
 logger = logging.getLogger(__name__)
 
 SUPABASE_URL = getenv("SUPABASE_URL")
@@ -87,6 +88,17 @@ class JobStatusResponse(BaseModel):
 
 # In-memory job tracking (for simplicity; use Redis/DB for production)
 upload_jobs: Dict[str, Dict] = {}
+
+# Async Supabase client (lazy initialized)
+_supabase_client: AsyncClient | None = None
+
+
+async def get_supabase() -> AsyncClient:
+    """Get or create async Supabase client"""
+    global _supabase_client
+    if _supabase_client is None:
+        _supabase_client = await create_async_client(SUPABASE_URL, SUPABASE_KEY)
+    return _supabase_client
 
 
 @app.get("/")
@@ -157,7 +169,7 @@ async def search_notes(question: str, top_k: int = 5):
     - List of search results with similarity scores
     """
     try:
-        results = rag_service.search_meeting_notes(question, top_k)
+        results = await rag_service.search_meeting_notes(question, top_k)
         return {"results": [SearchResult(**result) for result in results]}
     except FileNotFoundError as e:
         raise HTTPException(status_code=404, detail=str(e))
@@ -165,7 +177,7 @@ async def search_notes(question: str, top_k: int = 5):
         raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
 
 
-def process_youtube_upload(job_id: str, request: YouTubeUploadRequest):
+async def process_youtube_upload(job_id: str, request: YouTubeUploadRequest):
     """Background task to process YouTube video and save to Supabase."""
     try:
         logger.info(f"[{job_id}] Starting YouTube upload for URL: {request.url}")
@@ -187,11 +199,11 @@ def process_youtube_upload(job_id: str, request: YouTubeUploadRequest):
 
         # Connect to Supabase
         logger.debug(f"[{job_id}] Connecting to Supabase...")
-        supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
+        supabase = await get_supabase()
 
         # Check if already processed
         logger.debug(f"[{job_id}] Checking if video already exists in sources table...")
-        existing = supabase.table("sources").select("id").eq(
+        existing = await supabase.table("sources").select("id").eq(
             "source_type", "youtube"
         ).eq("source_id", video_id).execute()
         logger.debug(f"[{job_id}] Existing check result: {existing.data}")
@@ -215,7 +227,7 @@ def process_youtube_upload(job_id: str, request: YouTubeUploadRequest):
             overlap=request.overlap,
             language=request.language
         )
-        chunks = transcriber.transcribe(request.url, request.session_info, save_local=False)
+        chunks = await transcriber.transcribe(request.url, request.session_info, save_local=False)
         logger.info(f"[{job_id}] Transcription complete. Got {len(chunks)} chunks")
 
         upload_jobs[job_id]["message"] = "Saving to Supabase..."
@@ -230,7 +242,7 @@ def process_youtube_upload(job_id: str, request: YouTubeUploadRequest):
             "chunk_count": len(chunks)
         }
         logger.debug(f"[{job_id}] Source data: {source_data}")
-        source_result = supabase.table("sources").insert(source_data).execute()
+        source_result = await supabase.table("sources").insert(source_data).execute()
         logger.debug(f"[{job_id}] Source insert result: {source_result.data}")
 
         source_uuid = source_result.data[0]["id"]
@@ -246,7 +258,7 @@ def process_youtube_upload(job_id: str, request: YouTubeUploadRequest):
                 "embedding": chunk["embedding"]
             }
             logger.debug(f"[{job_id}] Inserting embedding {i+1}/{len(chunks)}")
-            supabase.table("embeddings").insert(embedding_data).execute()
+            await supabase.table("embeddings").insert(embedding_data).execute()
 
         logger.info(f"[{job_id}] Successfully completed processing {len(chunks)} chunks")
         upload_jobs[job_id] = {
@@ -266,7 +278,7 @@ def process_youtube_upload(job_id: str, request: YouTubeUploadRequest):
 
 
 @app.post("/api/youtube/upload", response_model=YouTubeUploadResponse)
-async def upload_youtube(request: YouTubeUploadRequest, background_tasks: BackgroundTasks):
+async def upload_youtube(request: YouTubeUploadRequest):
     """
     Upload a YouTube video for transcription and embedding.
 
@@ -311,8 +323,8 @@ async def upload_youtube(request: YouTubeUploadRequest, background_tasks: Backgr
         "video_id": video_id
     }
 
-    # Start background processing
-    background_tasks.add_task(process_youtube_upload, job_id, request)
+    # Start background processing as async task
+    asyncio.create_task(process_youtube_upload(job_id, request))
 
     return YouTubeUploadResponse(
         job_id=job_id,
@@ -372,9 +384,9 @@ async def list_youtube_sources():
         )
 
     try:
-        supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
+        supabase = await get_supabase()
         logger.debug("Querying sources table...")
-        result = supabase.table("sources").select(
+        result = await supabase.table("sources").select(
             "id, source_id, session_info, chunk_count, processed_at"
         ).eq("source_type", "youtube").order("processed_at", desc=True).execute()
 
