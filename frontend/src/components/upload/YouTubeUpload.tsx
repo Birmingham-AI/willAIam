@@ -28,7 +28,7 @@ const YouTubeUpload: React.FC = () => {
   const [language, setLanguage] = useState('en');
 
   const [isSubmitting, setIsSubmitting] = useState(false);
-  const [currentJob, setCurrentJob] = useState<JobStatus | null>(null);
+  const [activeJobs, setActiveJobs] = useState<JobStatus[]>([]);
   const [error, setError] = useState<string | null>(null);
 
   const [sources, setSources] = useState<Source[]>([]);
@@ -40,28 +40,44 @@ const YouTubeUpload: React.FC = () => {
     fetchSources();
   }, []);
 
-  // Poll for job status when processing
+  // Poll for job status when there are processing jobs
   useEffect(() => {
-    if (!currentJob || currentJob.status !== 'processing') return;
+    const processingJobs = activeJobs.filter(job => job.status === 'processing');
+    if (processingJobs.length === 0) return;
 
     const pollInterval = setInterval(async () => {
-      try {
-        const response = await fetch(`${config.apiBaseUrl}/api/youtube/status/${currentJob.job_id}`);
-        if (response.ok) {
-          const status: JobStatus = await response.json();
-          setCurrentJob(status);
-
-          if (status.status === 'completed') {
-            fetchSources(); // Refresh the sources list
+      const updates = await Promise.all(
+        processingJobs.map(async (job) => {
+          try {
+            const response = await fetch(`${config.apiBaseUrl}/api/youtube/status/${job.job_id}`);
+            if (response.ok) {
+              return await response.json() as JobStatus;
+            }
+          } catch (err) {
+            console.error(`Failed to poll job ${job.job_id}:`, err);
           }
-        }
-      } catch (err) {
-        console.error('Failed to poll job status:', err);
+          return null;
+        })
+      );
+
+      // Check if any jobs completed
+      const hasNewlyCompleted = updates.some(
+        (update, i) => update && update.status === 'completed' && processingJobs[i].status === 'processing'
+      );
+
+      // Update jobs state with new statuses
+      setActiveJobs(prev => prev.map(job => {
+        const update = updates.find((u) => u && u.job_id === job.job_id);
+        return update || job;
+      }));
+
+      if (hasNewlyCompleted) {
+        fetchSources();
       }
     }, 2000);
 
     return () => clearInterval(pollInterval);
-  }, [currentJob]);
+  }, [activeJobs]);
 
   const fetchSources = async () => {
     try {
@@ -81,7 +97,6 @@ const YouTubeUpload: React.FC = () => {
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError(null);
-    setCurrentJob(null);
     setIsSubmitting(true);
 
     try {
@@ -105,11 +120,13 @@ const YouTubeUpload: React.FC = () => {
       }
 
       const data = await response.json();
-      setCurrentJob({
+      // Add new job to the array instead of replacing
+      setActiveJobs(prev => [...prev, {
         job_id: data.job_id,
         status: 'processing',
         message: data.message,
-      });
+        video_id: data.video_id,
+      }]);
 
       // Clear form on successful submission
       setUrl('');
@@ -155,6 +172,10 @@ const YouTubeUpload: React.FC = () => {
       hour: '2-digit',
       minute: '2-digit',
     });
+  };
+
+  const dismissJob = (jobId: string) => {
+    setActiveJobs(prev => prev.filter(job => job.job_id !== jobId));
   };
 
   return (
@@ -295,41 +316,62 @@ const YouTubeUpload: React.FC = () => {
             </form>
           </div>
 
-          {/* Job Status */}
-          {currentJob && (
-            <div className={`bg-white rounded-2xl shadow-xl p-6 border-l-4 ${
-              currentJob.status === 'processing' ? 'border-blue-500' :
-              currentJob.status === 'completed' ? 'border-green-500' :
-              'border-red-500'
-            }`}>
-              <div className="flex items-start gap-4">
-                {currentJob.status === 'processing' && (
-                  <Loader2 className="w-6 h-6 text-blue-500 animate-spin flex-shrink-0" />
-                )}
-                {currentJob.status === 'completed' && (
-                  <CheckCircle className="w-6 h-6 text-green-500 flex-shrink-0" />
-                )}
-                {currentJob.status === 'failed' && (
-                  <XCircle className="w-6 h-6 text-red-500 flex-shrink-0" />
-                )}
-                <div className="flex-1">
-                  <h3 className="font-medium text-gray-800">
-                    {currentJob.status === 'processing' ? 'Processing...' :
-                     currentJob.status === 'completed' ? 'Completed!' :
-                     'Failed'}
-                  </h3>
-                  <p className="text-gray-600 text-sm mt-1">{currentJob.message}</p>
-                  {currentJob.video_id && (
-                    <p className="text-gray-500 text-xs mt-2">Video ID: {currentJob.video_id}</p>
-                  )}
-                  {currentJob.chunk_count && (
-                    <p className="text-gray-500 text-xs">Chunks: {currentJob.chunk_count}</p>
-                  )}
-                  {currentJob.error && (
-                    <p className="text-red-600 text-sm mt-2">{currentJob.error}</p>
-                  )}
+          {/* Active Jobs Status */}
+          {activeJobs.length > 0 && (
+            <div className="space-y-3">
+              <h3 className="text-sm font-medium text-gray-700">
+                Active Jobs ({activeJobs.filter(j => j.status === 'processing').length} processing)
+              </h3>
+              {activeJobs.map((job) => (
+                <div
+                  key={job.job_id}
+                  className={`bg-white rounded-2xl shadow-xl p-4 border-l-4 ${
+                    job.status === 'processing' ? 'border-blue-500' :
+                    job.status === 'completed' ? 'border-green-500' :
+                    'border-red-500'
+                  }`}
+                >
+                  <div className="flex items-start gap-3">
+                    {job.status === 'processing' && (
+                      <Loader2 className="w-5 h-5 text-blue-500 animate-spin flex-shrink-0" />
+                    )}
+                    {job.status === 'completed' && (
+                      <CheckCircle className="w-5 h-5 text-green-500 flex-shrink-0" />
+                    )}
+                    {job.status === 'failed' && (
+                      <XCircle className="w-5 h-5 text-red-500 flex-shrink-0" />
+                    )}
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center justify-between">
+                        <h4 className="font-medium text-gray-800 text-sm">
+                          {job.status === 'processing' ? 'Processing...' :
+                           job.status === 'completed' ? 'Completed!' :
+                           'Failed'}
+                        </h4>
+                        {job.status !== 'processing' && (
+                          <button
+                            onClick={() => dismissJob(job.job_id)}
+                            className="text-gray-400 hover:text-gray-600 p-1"
+                            title="Dismiss"
+                          >
+                            <XCircle className="w-4 h-4" />
+                          </button>
+                        )}
+                      </div>
+                      <p className="text-gray-600 text-xs mt-1 truncate">{job.message}</p>
+                      {job.video_id && (
+                        <p className="text-gray-500 text-xs mt-1">Video: {job.video_id}</p>
+                      )}
+                      {job.chunk_count !== undefined && (
+                        <p className="text-gray-500 text-xs">Chunks: {job.chunk_count}</p>
+                      )}
+                      {job.error && (
+                        <p className="text-red-600 text-xs mt-1">{job.error}</p>
+                      )}
+                    </div>
+                  </div>
                 </div>
-              </div>
+              ))}
             </div>
           )}
         </div>
