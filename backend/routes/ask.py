@@ -5,13 +5,13 @@ from models import QuestionRequest, SearchResult
 from services.rag_service import RAGService
 from services.streaming_agent import StreamingMeetingNotesAgent
 
-router = APIRouter(prefix="/api", tags=["ask"])
+router = APIRouter(prefix="/v1", tags=["chat"])
 
 # Initialize RAG service (agent created per-request to allow web search toggle)
 rag_service = RAGService()
 
 
-@router.post("/ask")
+@router.post("/chat")
 async def ask_question(request: QuestionRequest):
     """
     Ask a question and get a streaming response.

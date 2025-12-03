@@ -23,7 +23,7 @@ class ApiService {
   ): AbortController {
     const abortController = new AbortController();
 
-    fetch(`${this.baseURL}/api/ask`, {
+    fetch(`${this.baseURL}/v1/chat`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
