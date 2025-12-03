@@ -398,6 +398,59 @@ async def list_youtube_sources():
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@app.delete("/api/youtube/sources/{source_id}")
+async def delete_youtube_source(source_id: str):
+    """
+    Delete a YouTube source and its associated embeddings.
+
+    Path parameters:
+    - source_id: The UUID of the source record to delete
+
+    Returns:
+    - Success message with deleted counts
+    """
+    logger.debug(f"Deleting YouTube source: {source_id}")
+
+    if not SUPABASE_URL or not SUPABASE_KEY:
+        logger.error("Supabase credentials not configured")
+        raise HTTPException(
+            status_code=500,
+            detail="Supabase credentials not configured"
+        )
+
+    try:
+        supabase = await get_supabase()
+
+        # First delete associated embeddings (foreign key constraint)
+        embeddings_result = await supabase.table("embeddings").delete().eq(
+            "source_id", source_id
+        ).execute()
+        embeddings_deleted = len(embeddings_result.data) if embeddings_result.data else 0
+
+        # Then delete the source record
+        source_result = await supabase.table("sources").delete().eq(
+            "id", source_id
+        ).execute()
+
+        if not source_result.data:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Source not found: {source_id}"
+            )
+
+        logger.info(f"Deleted source {source_id} and {embeddings_deleted} embeddings")
+        return {
+            "message": "Source deleted successfully",
+            "source_id": source_id,
+            "embeddings_deleted": embeddings_deleted
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to delete source: {str(e)}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=8000)
