@@ -29,10 +29,14 @@ class YouTubeUploadRequest(BaseModel):
     language: Optional[str] = "en"
 
 
-class YouTubeUploadResponse(BaseModel):
+class UploadResponse(BaseModel):
     job_id: str
     status: str
     message: str
+
+
+# Alias for backwards compatibility
+YouTubeUploadResponse = UploadResponse
 
 
 class JobStatusResponse(BaseModel):

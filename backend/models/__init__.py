@@ -3,7 +3,8 @@ from .schemas import (
     SearchResult,
     QuestionResponse,
     YouTubeUploadRequest,
-    YouTubeUploadResponse,
+    UploadResponse,
+    YouTubeUploadResponse,  # Alias for backwards compatibility
     JobStatusResponse,
 )
 
@@ -12,6 +13,7 @@ __all__ = [
     "SearchResult",
     "QuestionResponse",
     "YouTubeUploadRequest",
+    "UploadResponse",
     "YouTubeUploadResponse",
     "JobStatusResponse",
 ]

@@ -2,15 +2,16 @@ import asyncio
 import os
 import uuid
 import logging
-from typing import Dict
+from typing import Dict, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Header
+from fastapi import APIRouter, Depends, HTTPException, Header, UploadFile, File, Form, Query
 
-from models import YouTubeUploadRequest, YouTubeUploadResponse, JobStatusResponse
+from models import YouTubeUploadRequest, UploadResponse, JobStatusResponse
 from clients import get_supabase, check_supabase_configured
 from actions.transcribe_youtube import YouTubeTranscriber
+from actions.process_slides import SlideProcessor
 
-router = APIRouter(prefix="/api/youtube", tags=["youtube"])
+router = APIRouter(prefix="/api/upload", tags=["upload"])
 logger = logging.getLogger(__name__)
 
 # In-memory job tracking (for simplicity; use Redis/DB for production)
@@ -41,6 +42,10 @@ async def verify_key():
     return {"valid": True}
 
 
+# =============================================================================
+# YouTube Upload
+# =============================================================================
+
 async def process_youtube_upload(job_id: str, request: YouTubeUploadRequest):
     """Background task to process YouTube video and save to Supabase."""
     try:
@@ -58,7 +63,7 @@ async def process_youtube_upload(job_id: str, request: YouTubeUploadRequest):
             return
 
         logger.info(f"[{job_id}] Extracted video ID: {video_id}")
-        upload_jobs[job_id]["video_id"] = video_id
+        upload_jobs[job_id]["source_id"] = video_id
         upload_jobs[job_id]["message"] = "Checking if video already exists..."
 
         # Connect to Supabase
@@ -77,7 +82,7 @@ async def process_youtube_upload(job_id: str, request: YouTubeUploadRequest):
             upload_jobs[job_id] = {
                 "status": "failed",
                 "message": "Video already processed",
-                "video_id": video_id,
+                "source_id": video_id,
                 "error": f"Video {video_id} has already been transcribed and uploaded"
             }
             return
@@ -128,7 +133,7 @@ async def process_youtube_upload(job_id: str, request: YouTubeUploadRequest):
         upload_jobs[job_id] = {
             "status": "completed",
             "message": f"Successfully processed {len(chunks)} chunks",
-            "video_id": video_id,
+            "source_id": video_id,
             "chunk_count": len(chunks)
         }
 
@@ -141,7 +146,7 @@ async def process_youtube_upload(job_id: str, request: YouTubeUploadRequest):
         }
 
 
-@router.post("/upload", response_model=YouTubeUploadResponse, dependencies=[Depends(verify_api_key)])
+@router.post("/youtube", response_model=UploadResponse, dependencies=[Depends(verify_api_key)])
 async def upload_youtube(request: YouTubeUploadRequest):
     """
     Upload a YouTube video for transcription and embedding.
@@ -180,32 +185,178 @@ async def upload_youtube(request: YouTubeUploadRequest):
     upload_jobs[job_id] = {
         "status": "processing",
         "message": "Starting transcription...",
-        "video_id": video_id
+        "source_id": video_id,
+        "source_type": "youtube"
     }
 
     # Start background processing as async task
     asyncio.create_task(process_youtube_upload(job_id, request))
 
-    return YouTubeUploadResponse(
+    return UploadResponse(
         job_id=job_id,
         status="processing",
         message="Transcription job started"
     )
 
 
+# =============================================================================
+# PDF Upload
+# =============================================================================
+
+async def process_pdf_upload(job_id: str, pdf_bytes: bytes, filename: str, session_info: str):
+    """Background task to process PDF slides and save to Supabase."""
+    try:
+        logger.info(f"[{job_id}] Starting PDF upload for file: {filename}")
+
+        upload_jobs[job_id]["message"] = "Checking if PDF already exists..."
+
+        # Connect to Supabase
+        supabase = await get_supabase()
+
+        # Check if already processed (using filename as source_id)
+        existing = await supabase.table("sources").select("id").eq(
+            "source_type", "pdf"
+        ).eq("source_id", filename).execute()
+
+        if existing.data:
+            logger.warning(f"[{job_id}] PDF {filename} already processed")
+            upload_jobs[job_id] = {
+                "status": "failed",
+                "message": "PDF already processed",
+                "source_id": filename,
+                "error": f"PDF {filename} has already been processed and uploaded"
+            }
+            return
+
+        upload_jobs[job_id]["message"] = "Processing slides and creating embeddings..."
+        logger.info(f"[{job_id}] Processing slides and creating embeddings...")
+
+        # Process PDF and create embeddings
+        processor = SlideProcessor()
+        chunks = await processor.process_from_bytes(pdf_bytes, filename, session_info)
+        logger.info(f"[{job_id}] Processing complete. Got {len(chunks)} chunks")
+
+        upload_jobs[job_id]["message"] = "Saving to Supabase..."
+        upload_jobs[job_id]["chunk_count"] = len(chunks)
+
+        # Insert source record
+        source_data = {
+            "source_type": "pdf",
+            "source_id": filename,
+            "session_info": session_info,
+            "chunk_count": len(chunks)
+        }
+        source_result = await supabase.table("sources").insert(source_data).execute()
+        source_uuid = source_result.data[0]["id"]
+        logger.info(f"[{job_id}] Source record created with ID: {source_uuid}")
+
+        # Insert embeddings
+        logger.info(f"[{job_id}] Inserting {len(chunks)} embeddings...")
+        for i, chunk in enumerate(chunks):
+            embedding_data = {
+                "source_id": source_uuid,
+                "text": chunk["text"],
+                "timestamp": chunk["timestamp"],
+                "embedding": chunk["embedding"]
+            }
+            await supabase.table("embeddings").insert(embedding_data).execute()
+
+        logger.info(f"[{job_id}] Successfully completed processing {len(chunks)} chunks")
+        upload_jobs[job_id] = {
+            "status": "completed",
+            "message": f"Successfully processed {len(chunks)} slides",
+            "source_id": filename,
+            "chunk_count": len(chunks)
+        }
+
+    except Exception as e:
+        logger.error(f"[{job_id}] Processing failed with error: {str(e)}", exc_info=True)
+        upload_jobs[job_id] = {
+            "status": "failed",
+            "message": "Processing failed",
+            "error": str(e)
+        }
+
+
+@router.post("/pdf", response_model=UploadResponse, dependencies=[Depends(verify_api_key)])
+async def upload_pdf(
+    file: UploadFile = File(...),
+    session_info: str = Form(...)
+):
+    """
+    Upload a PDF file for slide processing and embedding.
+
+    This endpoint starts a background job to:
+    1. Extract text from PDF slides
+    2. Analyze slides using AI
+    3. Create embeddings for each slide
+    4. Save to Supabase
+
+    Form data:
+    - file: PDF file to upload
+    - session_info: Description of the session (e.g., "Nov 2024 Birmingham AI Meetup")
+
+    Returns:
+    - job_id: ID to track the job status
+    - status: Current status ("processing")
+    - message: Status message
+    """
+    check_supabase_configured()
+
+    # Validate file type
+    if not file.filename.lower().endswith(".pdf"):
+        raise HTTPException(
+            status_code=400,
+            detail="File must be a PDF"
+        )
+
+    # Read file into memory
+    pdf_bytes = await file.read()
+
+    if len(pdf_bytes) == 0:
+        raise HTTPException(
+            status_code=400,
+            detail="Empty file uploaded"
+        )
+
+    # Generate job ID
+    job_id = str(uuid.uuid4())
+
+    # Initialize job status
+    upload_jobs[job_id] = {
+        "status": "processing",
+        "message": "Starting PDF processing...",
+        "source_id": file.filename,
+        "source_type": "pdf"
+    }
+
+    # Start background processing as async task
+    asyncio.create_task(process_pdf_upload(job_id, pdf_bytes, file.filename, session_info))
+
+    return UploadResponse(
+        job_id=job_id,
+        status="processing",
+        message="PDF processing job started"
+    )
+
+
+# =============================================================================
+# Shared Endpoints
+# =============================================================================
+
 @router.get("/status/{job_id}", response_model=JobStatusResponse)
 async def get_job_status(job_id: str):
     """
-    Get the status of a YouTube upload job.
+    Get the status of an upload job (YouTube or PDF).
 
     Path parameters:
-    - job_id: The job ID returned from /api/youtube/upload
+    - job_id: The job ID returned from upload endpoint
 
     Returns:
     - job_id: The job ID
     - status: Current status ("processing", "completed", or "failed")
     - message: Status message
-    - video_id: YouTube video ID (if available)
+    - video_id: YouTube video ID or PDF filename (if available)
     - chunk_count: Number of chunks processed (if completed)
     - error: Error message (if failed)
     """
@@ -220,32 +371,38 @@ async def get_job_status(job_id: str):
         job_id=job_id,
         status=job.get("status", "unknown"),
         message=job.get("message", ""),
-        video_id=job.get("video_id"),
+        video_id=job.get("source_id"),  # Keep as video_id for API compatibility
         chunk_count=job.get("chunk_count"),
         error=job.get("error")
     )
 
 
 @router.get("/sources")
-async def list_youtube_sources():
+async def list_sources(source_type: Optional[str] = Query(None, description="Filter by source type: youtube or pdf")):
     """
-    List all YouTube sources that have been processed.
+    List all sources that have been processed.
+
+    Query parameters:
+    - source_type: Optional filter by type ("youtube" or "pdf")
 
     Returns:
-    - List of source records with video_id, session_info, and chunk_count
+    - List of source records with source_id, session_info, and chunk_count
     """
-    logger.debug("Fetching YouTube sources list...")
+    logger.debug("Fetching sources list...")
     check_supabase_configured()
 
     try:
         supabase = await get_supabase()
-        logger.debug("Querying sources table...")
-        result = await supabase.table("sources").select(
-            "id, source_id, session_info, chunk_count, processed_at"
-        ).eq("source_type", "youtube").order("processed_at", desc=True).execute()
+        query = supabase.table("sources").select(
+            "id, source_type, source_id, session_info, chunk_count, processed_at"
+        )
 
-        logger.info(f"Found {len(result.data)} YouTube sources")
-        logger.debug(f"Sources data: {result.data}")
+        if source_type:
+            query = query.eq("source_type", source_type)
+
+        result = await query.order("processed_at", desc=True).execute()
+
+        logger.info(f"Found {len(result.data)} sources")
         return {"sources": result.data}
     except Exception as e:
         logger.error(f"Failed to fetch sources: {str(e)}", exc_info=True)
@@ -253,9 +410,9 @@ async def list_youtube_sources():
 
 
 @router.delete("/sources/{source_id}", dependencies=[Depends(verify_api_key)])
-async def delete_youtube_source(source_id: str):
+async def delete_source(source_id: str):
     """
-    Delete a YouTube source and its associated embeddings.
+    Delete a source and its associated embeddings.
 
     Path parameters:
     - source_id: The UUID of the source record to delete
@@ -263,7 +420,7 @@ async def delete_youtube_source(source_id: str):
     Returns:
     - Success message with deleted counts
     """
-    logger.debug(f"Deleting YouTube source: {source_id}")
+    logger.debug(f"Deleting source: {source_id}")
     check_supabase_configured()
 
     try:
