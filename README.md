@@ -1,6 +1,6 @@
 # will*AI*am
 
-Internal RAG playground for answering **"has this topic been talked about?"** from meeting notes, slide summaries, and livestream transcripts.
+RAG-powered knowledge base for the Birmingham AI community. Ask questions about past meetups, presentations, and livestreams.
 
 ## Demo
 
@@ -15,19 +15,29 @@ Internal RAG playground for answering **"has this topic been talked about?"** fr
    ```
 
 2. **Set up environment**
-   - Copy `.env.example` to `.env` (or create `.env` manually)
-   - Add your OpenAI API key:
-     ```
-     OPENAI_API_KEY=sk-...
-     ```
 
-3. **Start the application**
-  For docker:
+   Copy `.env.example` to `.env` and configure:
+   ```bash
+   # Required
+   OPENAI_API_KEY=sk-...
+
+   # Required for YouTube transcription and vector search
+   SUPABASE_URL=https://your-project.supabase.co
+   SUPABASE_KEY=your-service-role-key
+   ```
+
+3. **Initialize Supabase database**
+
+   Run the SQL script in `backend/SQL/initialize.sql` in your Supabase SQL editor to create the required tables and functions.
+
+4. **Start the application**
+
+   For Docker:
    ```bash
    docker-compose up -d
    ```
 
-  For podman:
+   For Podman:
    ```bash
    python -m podman_compose up -d
    ```
@@ -36,172 +46,134 @@ Internal RAG playground for answering **"has this topic been talked about?"** fr
    - Backend API: http://localhost:8001
    - API docs: http://localhost:8001/docs
 
-4. **Ask questions!**
-   - Open http://localhost:5174 in your browser
-   - Type your question in the chat interface
-   - Get AI-generated answers based on Birmingham AI meeting history
+5. **Use the app**
+   - **Chat**: Ask questions at http://localhost:5174
+   - **Upload**: Add YouTube videos at http://localhost:5174/upload
+
+## Features
+
+- **AI-powered Q&A**: Ask questions about Birmingham AI meetup content
+- **YouTube transcription**: Upload YouTube videos to automatically transcribe and embed for search
+- **Vector search**: Find relevant content using semantic similarity via Supabase pgvector
+- **Streaming responses**: Real-time AI answers with source citations
+- **Web search integration**: Optional web search for additional context
 
 ## Project Structure
 
 ```
 willAIam/
-├── backend/                    # FastAPI backend service
-│   ├── app.py                 # Main API application
+├── backend/
+│   ├── app.py                    # FastAPI application
+│   ├── routes/
+│   │   ├── ask.py                # Q&A streaming endpoint
+│   │   └── youtube.py            # YouTube upload endpoints
 │   ├── services/
-│   │   └── rag_service.py     # RAG logic (search, embedding, synthesis)
-│   ├── actions/               # Data processing pipeline (CLI tools)
-│   │   ├── process_slides.py  # Extract key points from PDF slides
-│   │   ├── embed.py           # Generate embeddings from meeting notes
-│   │   ├── bundle.py          # Combine embeddings for search
-│   │   └── ask.py             # CLI question interface
-│   ├── tests/                 # Backend tests
-│   ├── Dockerfile             # Backend container definition
-│   └── requirements.txt       # Python dependencies
-├── frontend/                  # React frontend application
+│   │   ├── rag_service.py        # Vector search via Supabase
+│   │   └── streaming_agent.py    # OpenAI agent for answers
+│   ├── actions/
+│   │   ├── transcribe_youtube.py # YouTube transcription + embedding
+│   │   ├── process_slides.py     # PDF slide extraction
+│   │   ├── embed.py              # Embedding generation
+│   │   └── bundle.py             # Embedding bundling (legacy)
+│   ├── clients/
+│   │   ├── openai.py             # Async OpenAI client
+│   │   └── supabase.py           # Async Supabase client
+│   ├── models/
+│   │   └── schemas.py            # Pydantic request/response models
+│   ├── SQL/
+│   │   └── initialize.sql        # Database schema
+│   └── requirements.txt
+├── frontend/
 │   ├── src/
-│   │   ├── components/        # React components
-│   │   ├── services/          # API service layer
-│   │   └── App.tsx            # Main application component
-│   ├── Dockerfile             # Frontend container definition
-│   └── package.json           # Node.js dependencies
-├── slides/                    # PDF slide decks to process
-├── sources/                   # Meeting notes JSON files
-├── embeddings/                # Generated embeddings
-│   └── bundled/              # Bundled embeddings for search
-├── docker-compose.yml         # Service orchestration
-└── .env                       # Environment variables (create from .env.example)
+│   │   ├── components/
+│   │   │   ├── chat/             # Chat UI components
+│   │   │   ├── upload/           # YouTube upload UI
+│   │   │   └── error/            # Error boundary
+│   │   ├── services/
+│   │   │   └── ApiService.ts     # API client
+│   │   └── App.tsx               # Routes and layout
+│   └── package.json
+├── docker-compose.yml
+└── .env
 ```
 
-## Prerequisites
+## API Endpoints
 
-- **Docker & Docker Compose** (recommended for easiest setup)
-- **OR** for local development:
-  - Python 3.12+
-  - Node.js 18+
-  - OpenAI API key
+### Q&A
+- `POST /api/ask` - Streaming Q&A with conversation history
+- `GET /api/search?question=...&top_k=5` - Vector search only
 
-## How It Works
+### YouTube
+- `POST /api/youtube/upload` - Start transcription job
+- `GET /api/youtube/status/{job_id}` - Check job status
+- `GET /api/youtube/sources` - List processed videos
+- `DELETE /api/youtube/sources/{id}` - Delete video and embeddings
 
-### Data Pipeline
+### Health
+- `GET /` - Health check
 
-```
-PDF Slides → Extract → JSON → Embed → Bundle → Search Index
-Meeting Notes ────────┘
-```
+Full API documentation: http://localhost:8001/docs
 
-1. **Process slides** (optional): Extract key points from PDF slide decks
-2. **Embed notes**: Convert meeting notes/slides to vector embeddings
-3. **Bundle**: Combine all embeddings into searchable index
-4. **Query**: Ask questions via web UI, get AI-synthesized answers with citations
+## YouTube Transcription
 
-### Architecture
+Add YouTube videos to the knowledge base via the web UI or API:
 
-- **Frontend**: React app with real-time streaming responses
-- **Backend**: FastAPI with OpenAI Agents SDK
-- **RAG Service**: Vector similarity search + GPT-4o-mini synthesis
-- **Models**: `text-embedding-3-large` for embeddings, `gpt-4o-mini` for generation
+**Web UI**: Navigate to http://localhost:5174/upload
 
-## Data Processing (Optional)
-
-If you need to add new meeting notes or process slide decks, use these CLI tools:
-
-### 1. Process PDF Slides
-
+**CLI**:
 ```bash
-# Place PDFs in slides/ directory, then:
-python -m backend.actions.process_slides
+python -m backend.actions.transcribe_youtube \
+  --url "https://www.youtube.com/watch?v=VIDEO_ID" \
+  --session "Nov 2024 Birmingham AI Meetup"
 ```
-- Extracts text and key points from each slide
-- Outputs JSON to `sources/` (e.g., `presentation.pdf` → `sources/presentation.json`)
 
-### 2. Create Embeddings
-
+**API**:
 ```bash
-python -m backend.actions.embed --year 2025 --month 10 --notes-file sources/2025-10-meeting.json
+curl -X POST http://localhost:8001/api/youtube/upload \
+  -H "Content-Type: application/json" \
+  -d '{"url": "VIDEO_URL", "session_info": "Session Name"}'
 ```
-- Generates vector embeddings from meeting notes or processed slides
-- Outputs to `embeddings/{year}-{month}-meeting-embed.json`
-- Add `--point-summary` flag for per-point embeddings instead of per-slide
 
-### 3. Bundle for Search
-
-```bash
-python -m backend.actions.bundle
-```
-- Combines all embeddings in `embeddings/` directory
-- Adds year/month metadata for citations
-- Creates `embeddings/bundled/bundle-{n}.json` with auto-incrementing index
+Options:
+- `chunk_size`: Characters per chunk (default: 1000)
+- `overlap`: Sentences to overlap between chunks (default: 1)
+- `language`: Transcript language code (default: "en")
 
 ## Development
 
-### Local Backend Setup
-
+### Backend
 ```bash
-# Create virtual environment
 python -m venv .venv
-source .venv/bin/activate  # macOS/Linux
-.venv\Scripts\activate     # Windows
-
-# Install dependencies
+source .venv/bin/activate
 pip install -r backend/requirements.txt
 
-# Run backend
 cd backend
 uvicorn app:app --reload --host 0.0.0.0 --port 8000
 ```
 
-### Local Frontend Setup
-
+### Frontend
 ```bash
 cd frontend
 npm install
 npm run dev
 ```
 
-## API Endpoints
+## Database Schema
 
-- `POST /api/ask` - Server-Sent Events streaming responses
-- `GET /api/search` - Vector similarity search only (no synthesis)
-- `GET /` - Health check
+The system uses Supabase with pgvector for vector similarity search:
 
-Full API documentation: http://localhost:8001/docs
+**sources**: Tracks uploaded content (YouTube videos, etc.)
+- `id`, `source_type`, `source_id`, `session_info`, `chunk_count`, `processed_at`
 
-## Data Format
+**embeddings**: Stores text chunks with vector embeddings
+- `id`, `source_id`, `text`, `timestamp`, `embedding` (vector 1536)
 
-### Meeting Notes JSON
-```json
-[
-  {
-    "slide": 1,
-    "text": "Discussion about RAG systems...",
-    "summary": "Overview of retrieval-augmented generation"
-  }
-]
-```
-
-### Embedding Output
-```json
-[
-  {
-    "year": 2025,
-    "month": 10,
-    "slide": 1,
-    "text": "Discussion about RAG systems...",
-    "embedding": [0.123, -0.456, ...]
-  }
-]
-```
-
-## Troubleshooting
-
-- **No answers returned**: Ensure embeddings are bundled (`python -m backend.actions.bundle`)
-- **OpenAI API errors**: Check `.env` file has valid `OPENAI_API_KEY`
-- **Docker issues**: Run `docker-compose down && docker-compose up --build`
-- **Frontend can't connect**: Ensure backend is running on port 8000
+**match_embeddings()**: RPC function for cosine similarity search
 
 ## Technologies
 
-- **Backend**: FastAPI, OpenAI Agents SDK, NumPy, Pandas
-- **Frontend**: React, TypeScript, Tailwind CSS
-- **AI**: OpenAI GPT-4o-mini, text-embedding-3-large
+- **Backend**: FastAPI, OpenAI Agents SDK, Supabase (async)
+- **Frontend**: React, TypeScript, Tailwind CSS, React Router
+- **AI**: OpenAI GPT-4o-mini, text-embedding-3-small
+- **Database**: Supabase PostgreSQL with pgvector
 - **Infrastructure**: Docker, Docker Compose

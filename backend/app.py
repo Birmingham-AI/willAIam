@@ -1,11 +1,15 @@
-from fastapi import FastAPI, HTTPException
-from fastapi.responses import StreamingResponse
+import logging
+from dotenv import load_dotenv
+from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
-from typing import List, Dict, Optional
 
-from services.rag_service import RAGService
-from services.streaming_agent import StreamingMeetingNotesAgent
+from routes import ask_router, youtube_router
+
+# Load environment variables
+load_dotenv()
+
+# Configure logging
+logging.basicConfig(level=logging.WARNING)
 
 app = FastAPI(
     title="willAIam Backend API",
@@ -22,27 +26,9 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Initialize RAG service (agent created per-request to allow web search toggle)
-rag_service = RAGService()
-
-
-class QuestionRequest(BaseModel):
-    question: str
-    messages: Optional[List[Dict[str, str]]] = []
-    enable_web_search: Optional[bool] = True
-
-
-class SearchResult(BaseModel):
-    slide: int
-    year: int
-    month: int
-    text: str
-    score: float
-
-
-class QuestionResponse(BaseModel):
-    answer: str
-    results: List[SearchResult]
+# Include routers
+app.include_router(ask_router)
+app.include_router(youtube_router)
 
 
 @app.get("/")
@@ -53,72 +39,6 @@ async def root():
         "service": "willAIam Backend API",
         "version": "1.0.0"
     }
-
-
-@app.post("/api/ask")
-async def ask_question(request: QuestionRequest):
-    """
-    Ask a question and get a streaming response.
-
-    The agent will use RAGService as a tool to search meeting notes and
-    optionally use web search for additional context.
-
-    Request body:
-    - question: The question to ask
-    - messages: Optional conversation history [{"role": "user/assistant", "content": "..."}]
-    - enable_web_search: Whether to allow web search (default: True)
-
-    Returns:
-    Server-Sent Events stream with the answer
-    """
-    try:
-        # Create agent with requested configuration
-        agent = StreamingMeetingNotesAgent(
-            rag_service,
-            enable_web_search=request.enable_web_search
-        )
-
-        async def generate():
-            # Stream the answer from the agent with conversation history
-            async for chunk in agent.stream_answer(request.question, request.messages):
-                yield f"data: {chunk}\n\n"
-
-            # Send completion marker
-            yield "data: [DONE]\n\n"
-
-        return StreamingResponse(
-            generate(),
-            media_type="text/event-stream",
-            headers={
-                "Cache-Control": "no-cache",
-                "Connection": "keep-alive",
-            }
-        )
-    except FileNotFoundError as e:
-        raise HTTPException(status_code=404, detail=str(e))
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
-
-
-@app.get("/api/search")
-async def search_notes(question: str, top_k: int = 5):
-    """
-    Search meeting notes without answer synthesis.
-
-    Query parameters:
-    - question: The search query
-    - top_k: Number of top results to return (default: 5)
-
-    Returns:
-    - List of search results with similarity scores
-    """
-    try:
-        results = rag_service.search_meeting_notes(question, top_k)
-        return {"results": [SearchResult(**result) for result in results]}
-    except FileNotFoundError as e:
-        raise HTTPException(status_code=404, detail=str(e))
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
 
 
 if __name__ == "__main__":

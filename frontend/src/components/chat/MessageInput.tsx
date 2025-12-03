@@ -13,7 +13,7 @@ const MessageInput: React.FC<MessageInputProps> = ({
   cancelStreaming,
   onNewChat,
 }) => {
-  const [enableWebSearch, setEnableWebSearch] = useState(true);
+  const [enableWebSearch, setEnableWebSearch] = useState(false);
   const handleKeyPress = (e: React.KeyboardEvent) => {
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
