@@ -204,7 +204,7 @@ async def upload_youtube(request: YouTubeUploadRequest):
 # =============================================================================
 
 async def process_pdf_upload(job_id: str, pdf_bytes: bytes, filename: str, session_info: str):
-    """Background task to process PDF slides and save to Supabase."""
+    """Background task to process PDF slides and save to Supabase one page at a time."""
     try:
         logger.info(f"[{job_id}] Starting PDF upload for file: {filename}")
 
@@ -228,31 +228,26 @@ async def process_pdf_upload(job_id: str, pdf_bytes: bytes, filename: str, sessi
             }
             return
 
-        upload_jobs[job_id]["message"] = "Processing slides and creating embeddings..."
-        logger.info(f"[{job_id}] Processing slides and creating embeddings...")
-
-        # Process PDF and create embeddings
-        processor = SlideProcessor()
-        chunks = await processor.process_from_bytes(pdf_bytes, filename, session_info)
-        logger.info(f"[{job_id}] Processing complete. Got {len(chunks)} chunks")
-
-        upload_jobs[job_id]["message"] = "Saving to Supabase..."
-        upload_jobs[job_id]["chunk_count"] = len(chunks)
-
-        # Insert source record
+        # Insert source record first (we'll update chunk_count at the end)
         source_data = {
             "source_type": "pdf",
             "source_id": filename,
             "session_info": session_info,
-            "chunk_count": len(chunks)
+            "chunk_count": 0
         }
         source_result = await supabase.table("sources").insert(source_data).execute()
         source_uuid = source_result.data[0]["id"]
         logger.info(f"[{job_id}] Source record created with ID: {source_uuid}")
 
-        # Insert embeddings
-        logger.info(f"[{job_id}] Inserting {len(chunks)} embeddings...")
-        for i, chunk in enumerate(chunks):
+        # Process PDF page by page and insert each embedding immediately
+        processor = SlideProcessor()
+        chunk_count = 0
+
+        async for chunk in processor.stream_from_bytes(pdf_bytes, filename, session_info):
+            # Update job status with progress
+            upload_jobs[job_id]["message"] = f"Processing slide {chunk['page_num']}/{chunk['total_pages']}..."
+
+            # Insert embedding immediately
             embedding_data = {
                 "source_id": source_uuid,
                 "text": chunk["text"],
@@ -260,13 +255,18 @@ async def process_pdf_upload(job_id: str, pdf_bytes: bytes, filename: str, sessi
                 "embedding": chunk["embedding"]
             }
             await supabase.table("embeddings").insert(embedding_data).execute()
+            chunk_count += 1
+            upload_jobs[job_id]["chunk_count"] = chunk_count
 
-        logger.info(f"[{job_id}] Successfully completed processing {len(chunks)} chunks")
+        # Update source record with final chunk count
+        await supabase.table("sources").update({"chunk_count": chunk_count}).eq("id", source_uuid).execute()
+
+        logger.info(f"[{job_id}] Successfully completed processing {chunk_count} slides")
         upload_jobs[job_id] = {
             "status": "completed",
-            "message": f"Successfully processed {len(chunks)} slides",
+            "message": f"Successfully processed {chunk_count} slides",
             "source_id": filename,
-            "chunk_count": len(chunks)
+            "chunk_count": chunk_count
         }
 
     except Exception as e:
