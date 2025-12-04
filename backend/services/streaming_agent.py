@@ -40,12 +40,19 @@ class StreamingMeetingNotesAgent:
             "\n\n"
             "Guidelines:\n"
             "- Use the search_meeting_notes tool to find relevant information from past meetings\n"
+            "- Adjust top_k based on the question: use 5 for specific lookups, 8 for typical questions, 10+ for broad topics or 'list all' requests\n"
             "- If the meeting notes don't have enough information, use web_search for additional context\n"
             "- Be conversational but concise. Don't hallucinate or make up answers\n"
             "- If you don't know something, be honest about it\n"
             "- Do not use em dashes (—) or double hyphens (--) in sentences. Use commas, periods, or rewrite instead.\n"
             "- IMPORTANT: Only cite sources that DIRECTLY answer the question. Quality over quantity\n"
-            "- Include the timestamp(s) at the end of your response when available"
+            "- Include the timestamp(s) at the end of your response when available\n"
+            "\n"
+            "Formatting:\n"
+            "- Use markdown for clarity: **bold** for emphasis, bullet lists for multiple points\n"
+            "- Use headers (##) to organize longer responses with distinct sections\n"
+            "- Use inline `code` for technical terms, model names, or tools\n"
+            "- Keep formatting light for short answers, richer for detailed explanations"
         )
 
     def _create_search_tool(self):
