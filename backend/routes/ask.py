@@ -1,6 +1,7 @@
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import StreamingResponse
 
+from middleware import rate_limiter
 from models import QuestionRequest, SearchResult
 from services.rag_service import RAGService
 from services.streaming_agent import StreamingMeetingNotesAgent
@@ -12,7 +13,7 @@ rag_service = RAGService()
 
 
 @router.post("/chat")
-async def ask_question(request: QuestionRequest):
+async def ask_question(request: Request, question_request: QuestionRequest):
     """
     Ask a question and get a streaming response.
 
@@ -27,16 +28,18 @@ async def ask_question(request: QuestionRequest):
     Returns:
     Server-Sent Events stream with the answer
     """
+    rate_limiter.check_rate_limit(request)
+
     try:
         # Create agent with requested configuration
         agent = StreamingMeetingNotesAgent(
             rag_service,
-            enable_web_search=request.enable_web_search
+            enable_web_search=question_request.enable_web_search
         )
 
         async def generate():
             # Stream the answer from the agent with conversation history
-            async for chunk in agent.stream_answer(request.question, request.messages):
+            async for chunk in agent.stream_answer(question_request.question, question_request.messages):
                 # Escape newlines in chunk to preserve them in SSE format
                 # SSE interprets bare newlines as message delimiters, so we encode them
                 escaped_chunk = chunk.replace('\n', '\\n')
@@ -60,7 +63,7 @@ async def ask_question(request: QuestionRequest):
 
 
 @router.get("/search")
-async def search_notes(question: str, top_k: int = 5):
+async def search_notes(request: Request, question: str, top_k: int = 5):
     """
     Search meeting notes without answer synthesis.
 
@@ -71,6 +74,8 @@ async def search_notes(question: str, top_k: int = 5):
     Returns:
     - List of search results with similarity scores
     """
+    rate_limiter.check_rate_limit(request)
+
     try:
         results = await rag_service.search_meeting_notes(question, top_k)
         return {"results": [SearchResult(**result) for result in results]}

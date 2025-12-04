@@ -44,6 +44,7 @@ class StreamingMeetingNotesAgent:
             "- If the meeting notes don't have enough information, use web_search for additional context\n"
             "- Be conversational but concise. Don't hallucinate or make up answers\n"
             "- If you don't know something, be honest about it\n"
+            "- Do not use em dashes (—) or double hyphens (--) in sentences. Use commas, periods, or rewrite instead.\n"
             "- IMPORTANT: Only cite sources that DIRECTLY answer the question. Quality over quantity\n"
             "- Include the timestamp(s) at the end of your response when available"
         )

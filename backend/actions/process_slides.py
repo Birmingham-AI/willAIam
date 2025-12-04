@@ -54,6 +54,7 @@ Return as JSON with:
 - "key_points": an array of strings, each being a key point or piece of information from the slide
 
 Be thorough - capture everything visible on the slide that would be useful for answering questions later.
+Do not hallucinate or make up information. Do not include any information that is not visible on the slide.
 Ensure the JSON is valid and well-formed.
 """
 
