@@ -35,10 +35,6 @@ class UploadResponse(BaseModel):
     message: str
 
 
-# Alias for backwards compatibility
-YouTubeUploadResponse = UploadResponse
-
-
 class JobStatusResponse(BaseModel):
     job_id: str
     status: str
