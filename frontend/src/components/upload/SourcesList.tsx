@@ -43,6 +43,14 @@ const SourcesList: React.FC<SourcesListProps> = ({
     onDelete(id);
   };
 
+  const formatSourceType = (type: string): string => {
+    const displayNames: Record<string, string> = {
+      youtube: 'YouTube',
+      pdf: 'PDF',
+    };
+    return displayNames[type] ?? type;
+  };
+
   const getSourceIcon = (sourceType: string) => {
     if (sourceType === 'youtube') {
       return (
@@ -109,7 +117,7 @@ const SourcesList: React.FC<SourcesListProps> = ({
                 <div className="flex-1 min-w-0">
                   <p className="font-medium text-gray-800 truncate">{source.session_info}</p>
                   <div className="flex items-center gap-3 text-xs text-gray-500 mt-1">
-                    <span className="capitalize">{source.source_type}</span>
+                    <span>{formatSourceType(source.source_type)}</span>
                     <span>{source.chunk_count} chunks</span>
                     <span>{formatDate(source.processed_at)}</span>
                   </div>
