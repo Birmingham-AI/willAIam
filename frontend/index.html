@@ -5,6 +5,19 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>willAIam - Birmingham AI Chat</title>
     <meta name="description" content="Ask questions about Birmingham AI community meeting notes, slide summaries, and transcripts." />
+    <script>
+      // GitHub Pages SPA routing handler
+      // Check for redirect from 404.html and restore the original path
+      (function() {
+        var redirect = sessionStorage.getItem('spa-redirect');
+        if (redirect) {
+          sessionStorage.removeItem('spa-redirect');
+          if (redirect !== '/' && redirect !== window.location.pathname) {
+            window.history.replaceState(null, '', redirect);
+          }
+        }
+      })();
+    </script>
   </head>
   <body>
     <div id="root"></div>
