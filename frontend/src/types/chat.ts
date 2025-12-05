@@ -6,6 +6,7 @@ export interface ChatMessage {
   type: 'user' | 'assistant';
   content: string;
   timestamp: string;
+  traceId?: string;  // For assistant messages, used for feedback
 }
 
 /**

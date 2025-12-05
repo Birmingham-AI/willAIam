@@ -42,3 +42,14 @@ class JobStatusResponse(BaseModel):
     source_id: Optional[str] = None
     chunk_count: Optional[int] = None
     error: Optional[str] = None
+
+
+class FeedbackRequest(BaseModel):
+    trace_id: str
+    rating: str  # 'like' or 'dislike'
+    comment: Optional[str] = None
+
+
+class FeedbackResponse(BaseModel):
+    success: bool
+    message: str

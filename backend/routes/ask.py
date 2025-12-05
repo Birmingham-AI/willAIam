@@ -43,13 +43,18 @@ async def ask_question(request: Request, question_request: QuestionRequest):
 
         async def generate():
             # Stream the answer from the agent with conversation history
-            async for chunk in agent.stream_answer(
+            async for chunk_type, data in agent.stream_answer(
                 question_request.question,
                 question_request.messages,
                 user_id=client_ip
             ):
-                escaped_chunk = chunk.replace('\n', '\\n')
-                yield f"data: {escaped_chunk}\n\n"
+                if chunk_type == "trace_id":
+                    # Send trace ID as a special event
+                    yield f"event: trace_id\ndata: {data}\n\n"
+                else:
+                    # Send text chunk
+                    escaped_chunk = data.replace('\n', '\\n')
+                    yield f"data: {escaped_chunk}\n\n"
 
             # Send completion marker
             yield "data: [DONE]\n\n"

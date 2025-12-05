@@ -6,11 +6,12 @@ using the OpenAI Agents SDK with real-time token streaming. The agent uses RAGSe
 as a tool to search meeting notes.
 """
 
+import uuid
 from datetime import datetime
 from pathlib import Path
 from openai.types.responses import ResponseTextDeltaEvent
 from agents import Agent, Runner, function_tool, WebSearchTool
-from typing import AsyncGenerator
+from typing import AsyncGenerator, Tuple
 
 from services.langfuse_tracing import get_langfuse_client
 
@@ -81,7 +82,9 @@ class StreamingMeetingNotesAgent:
 
         return search_meeting_notes
 
-    async def stream_answer(self, question: str, messages: list = None, user_id: str = None) -> AsyncGenerator[str, None]:
+    async def stream_answer(
+        self, question: str, messages: list = None, user_id: str = None
+    ) -> AsyncGenerator[Tuple[str, str], None]:
         """
         Stream a conversational answer to a question
 
@@ -91,7 +94,7 @@ class StreamingMeetingNotesAgent:
             user_id: Optional user ID for tracing (e.g., client IP)
 
         Yields:
-            Text chunks as they are generated
+            Tuple of (chunk_type, data) where chunk_type is 'trace_id' or 'text'
         """
         # Create tools list
         tools = [self._create_search_tool()]
@@ -131,9 +134,14 @@ class StreamingMeetingNotesAgent:
         langfuse = get_langfuse_client()
 
         if langfuse:
+            # Generate a deterministic trace ID for feedback correlation
+            trace_id = langfuse.create_trace_id(seed=str(uuid.uuid4()))
+
+            # Create trace with explicit ID using trace_context
             with langfuse.start_as_current_span(
                 name="WillAIam Chat",
-                input=question
+                input=question,
+                trace_context={"trace_id": trace_id}
             ) as span:
                 span.update_trace(
                     user_id=user_id or "anonymous",
@@ -145,15 +153,19 @@ class StreamingMeetingNotesAgent:
                     }
                 )
 
+                # Yield trace_id first so frontend can capture it
+                yield ("trace_id", trace_id)
+
                 chunks = []
                 async for chunk in stream_events():
                     chunks.append(chunk)
-                    yield chunk
+                    yield ("text", chunk)
 
                 span.update(output="".join(chunks))
         else:
+            # No tracing, no trace_id
             async for chunk in stream_events():
-                yield chunk
+                yield ("text", chunk)
 
     async def get_complete_answer(self, question: str) -> str:
         """
@@ -166,6 +178,7 @@ class StreamingMeetingNotesAgent:
             Complete answer as a string
         """
         chunks = []
-        async for chunk in self.stream_answer(question):
-            chunks.append(chunk)
+        async for chunk_type, data in self.stream_answer(question):
+            if chunk_type == "text":
+                chunks.append(data)
         return "".join(chunks)

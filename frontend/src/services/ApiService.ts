@@ -19,7 +19,8 @@ class ApiService {
     conversationHistory: Array<{ role: string; content: string }>,
     onChunk: (chunk: string) => void,
     onComplete: () => void,
-    onError: (error: Error) => void
+    onError: (error: Error) => void,
+    onTraceId?: (traceId: string) => void
   ): AbortController {
     const abortController = new AbortController();
 
@@ -47,6 +48,8 @@ class ApiService {
           throw new Error('No reader available');
         }
 
+        let buffer = '';
+
         const readChunk = (): Promise<void> => {
           return reader.read().then(({ done, value }) => {
             if (done) {
@@ -54,12 +57,26 @@ class ApiService {
               return;
             }
 
-            const chunk = decoder.decode(value, { stream: true });
-            const lines = chunk.split('\n');
+            buffer += decoder.decode(value, { stream: true });
+            const lines = buffer.split('\n');
+
+            // Keep the last potentially incomplete line in the buffer
+            buffer = lines.pop() || '';
+
+            let currentEvent = '';
 
             for (const line of lines) {
-              if (line.startsWith('data: ')) {
+              if (line.startsWith('event: ')) {
+                currentEvent = line.slice(7).trim();
+              } else if (line.startsWith('data: ')) {
                 const data = line.slice(6); // Don't trim - preserve spaces
+
+                if (currentEvent === 'trace_id' && onTraceId) {
+                  onTraceId(data.trim());
+                  currentEvent = '';
+                  continue;
+                }
+
                 if (data.trim() === '[DONE]') {
                   onComplete();
                   return;
@@ -68,6 +85,7 @@ class ApiService {
                 const unescapedData = data.replace(/\\n/g, '\n');
                 // Send all chunks, even empty ones (might be spaces)
                 onChunk(unescapedData);
+                currentEvent = '';
               }
             }
 
@@ -84,6 +102,33 @@ class ApiService {
       });
 
     return abortController;
+  }
+
+  /**
+   * Submit feedback for a response
+   */
+  async submitFeedback(
+    traceId: string,
+    rating: 'like' | 'dislike',
+    comment?: string
+  ): Promise<{ success: boolean; message: string }> {
+    const response = await fetch(`${this.baseURL}/v1/feedback`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        trace_id: traceId,
+        rating,
+        comment
+      }),
+    });
+
+    if (!response.ok) {
+      throw new Error(`HTTP error! status: ${response.status}`);
+    }
+
+    return response.json();
   }
 }
 

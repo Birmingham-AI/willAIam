@@ -102,6 +102,29 @@ const ChatContainer: React.FC<ChatContainerProps> = ({ selectedModel = 'gpt-4o-m
           );
           setIsLoading(false);
           abortControllerRef.current = null;
+        },
+        // On trace ID received
+        (traceId: string) => {
+          setMessages(prev => {
+            const hasAssistantMsg = prev.some(msg => msg.id === assistantMessageId);
+            if (!hasAssistantMsg) {
+              // Create assistant message with trace ID (content will be added later)
+              return [...prev, {
+                id: assistantMessageId,
+                type: 'assistant' as const,
+                content: '',
+                timestamp: new Date().toISOString(),
+                traceId
+              }];
+            } else {
+              // Update existing message with trace ID
+              return prev.map(msg =>
+                msg.id === assistantMessageId
+                  ? { ...msg, traceId }
+                  : msg
+              );
+            }
+          });
         }
       );
     } catch (error) {

@@ -5,6 +5,7 @@ import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import YouTubeThumbnail from './YouTubeThumbnail';
 import CodeBlock from './CodeBlock';
+import FeedbackControls from './FeedbackControls';
 
 interface MessageListProps {
   messages: ChatMessage[];
@@ -99,7 +100,9 @@ const MessageList: React.FC<MessageListProps> = ({ messages, isLoading }) => {
         </div>
       ) : (
         <div className="space-y-4">
-          {messages.map((message) => (
+          {messages
+            .filter((message) => message.type === 'user' || message.content)
+            .map((message) => (
             <div key={message.id} className={`flex items-start gap-3 ${
               message.type === 'user' ? 'flex-row-reverse' : 'flex-row'
             }`}>
@@ -174,13 +177,24 @@ const MessageList: React.FC<MessageListProps> = ({ messages, isLoading }) => {
                       </div>
                     );
                   })()}
+
+                  {/* Feedback controls for assistant messages with trace IDs */}
+                  {message.type === 'assistant' && message.traceId && (
+                    <FeedbackControls
+                      traceId={message.traceId}
+                      isStreaming={isLoading && message.id === messages[messages.length - 1]?.id}
+                    />
+                  )}
                 </div>
               </div>
             </div>
           ))}
 
-          {/* Loading Indicator - only show if loading and last message is not assistant (i.e., waiting for first chunk) */}
-          {isLoading && messages.length > 0 && messages[messages.length - 1].type !== 'assistant' && (
+          {/* Loading Indicator - only show if loading and last message is not assistant with content */}
+          {isLoading && messages.length > 0 && (
+            messages[messages.length - 1].type !== 'assistant' ||
+            !messages[messages.length - 1].content
+          ) && (
             <div className="flex items-start gap-3 flex-row">
               <div className="flex-shrink-0 w-8 h-8 rounded-full bg-gradient-to-b from-gray-300 to-gray-500 shadow-md border border-gray-400/50 flex items-center justify-center">
                 <Bot className="w-5 h-5 text-white" />

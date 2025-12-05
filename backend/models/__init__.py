@@ -5,6 +5,8 @@ from .schemas import (
     YouTubeUploadRequest,
     UploadResponse,
     JobStatusResponse,
+    FeedbackRequest,
+    FeedbackResponse,
 )
 
 __all__ = [
@@ -14,4 +16,6 @@ __all__ = [
     "YouTubeUploadRequest",
     "UploadResponse",
     "JobStatusResponse",
+    "FeedbackRequest",
+    "FeedbackResponse",
 ]
