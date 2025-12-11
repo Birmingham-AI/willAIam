@@ -50,20 +50,6 @@ const MessageInput: React.FC<MessageInputProps> = ({
               <Globe className="w-5 h-5" />
             </button>
 
-            {/* Voice Button */}
-            {voiceProps && (
-              <VoiceButton
-                isSupported={voiceProps.isSupported}
-                isVoiceMode={voiceProps.isVoiceMode}
-                isRecording={voiceProps.isRecording}
-                isPlaying={voiceProps.isPlaying}
-                isConnecting={voiceProps.isConnecting}
-                onToggleVoiceMode={voiceProps.onToggleVoiceMode}
-                onStartRecording={voiceProps.onStartRecording}
-                onStopRecording={voiceProps.onStopRecording}
-              />
-            )}
-
             {/* Message Input */}
             <textarea
               ref={textareaRef}
@@ -79,6 +65,20 @@ const MessageInput: React.FC<MessageInputProps> = ({
                 overflowY: inputMessage.split('\n').length > 5 ? 'auto' : 'hidden'
               }}
             />
+
+            {/* Voice Button */}
+            {voiceProps && (
+              <VoiceButton
+                isSupported={voiceProps.isSupported}
+                isVoiceMode={voiceProps.isVoiceMode}
+                isRecording={voiceProps.isRecording}
+                isPlaying={voiceProps.isPlaying}
+                isConnecting={voiceProps.isConnecting}
+                onToggleVoiceMode={voiceProps.onToggleVoiceMode}
+                onStartRecording={voiceProps.onStartRecording}
+                onStopRecording={voiceProps.onStopRecording}
+              />
+            )}
 
             {/* Stop Button (when streaming) */}
             {isLoading && (

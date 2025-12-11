@@ -76,16 +76,19 @@ export function useVoice(
 
         case 'recording_stopped':
           setIsRecording(false);
-          // Trigger user message callback with final transcript
-          if (userTranscriptRef.current && onUserMessage) {
-            onUserMessage(userTranscriptRef.current);
-          }
           break;
 
         case 'transcript':
-          // Update user transcript
-          setUserTranscript(event.data as string);
-          userTranscriptRef.current = event.data as string;
+          // User's speech has been transcribed - add to chat
+          {
+            const transcript = event.data as string;
+            setUserTranscript(transcript);
+            userTranscriptRef.current = transcript;
+            // Trigger user message callback when transcript arrives
+            if (transcript && onUserMessage) {
+              onUserMessage(transcript);
+            }
+          }
           break;
 
         case 'response_text':
