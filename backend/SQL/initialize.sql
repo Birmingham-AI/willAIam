@@ -1,7 +1,7 @@
 -- Enable pgvector
  CREATE EXTENSION IF NOT EXISTS vector;
 
- -- Sources table
+ -- Sources table (RLS enabled, service role only)
  CREATE TABLE sources (
    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
    source_type TEXT NOT NULL,
@@ -12,7 +12,9 @@
    UNIQUE(source_type, source_id)
  );
 
- -- Embeddings table
+ ALTER TABLE sources ENABLE ROW LEVEL SECURITY;
+
+ -- Embeddings table (RLS enabled, service role only)
  CREATE TABLE embeddings (
    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
    source_id UUID REFERENCES sources(id) ON DELETE CASCADE,
@@ -24,6 +26,7 @@
  -- Index for similarity search
  CREATE INDEX ON embeddings USING hnsw (embedding vector_cosine_ops);
 
+ ALTER TABLE embeddings ENABLE ROW LEVEL SECURITY;
 
 -- Function for similarity search with optional session filter
 CREATE OR REPLACE FUNCTION match_embeddings(
@@ -39,6 +42,7 @@ CREATE OR REPLACE FUNCTION match_embeddings(
     similarity FLOAT
   )
   LANGUAGE plpgsql
+  SET search_path = public
   AS $$
   BEGIN
     RETURN QUERY
