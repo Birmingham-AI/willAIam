@@ -38,6 +38,7 @@ class VoiceClientApp:
         # State
         self.is_running = False
         self.is_recording = False
+        self.is_connecting = False  # Track if connection is in progress
         self.current_session_active = False
 
         # Response text accumulation for voice trace
@@ -81,6 +82,11 @@ class VoiceClientApp:
             )
 
             logger.info("All components initialized")
+            
+            # Establish persistent WebRTC connection on startup
+            logger.info("Establishing WebRTC connection...")
+            await self.webrtc_client.connect()
+            logger.info("WebRTC connection established and ready")
 
         except Exception as e:
             logger.error(f"Failed to initialize: {e}")
@@ -104,10 +110,11 @@ class VoiceClientApp:
         Args:
             audio_data: PCM audio data
         """
-        logger.info(f"Received {len(audio_data)} bytes of audio from OpenAI")
+        logger.debug(f"Callback _on_audio_received invoked with {len(audio_data)} bytes of audio")
         if self.audio_handler:
             # Play audio through speakers
             self.audio_handler.play_audio(audio_data)
+            logger.debug(f"Queued {len(audio_data)} bytes for playback")
         else:
             logger.warning("Audio handler not available, cannot play audio")
 
@@ -119,6 +126,7 @@ class VoiceClientApp:
             event: Event dictionary from OpenAI Realtime API
         """
         event_type = event.get("type", "")
+        logger.debug(f"WebRTC event received: {event_type}")  # Add debug logging
 
         # Handle different event types
         if event_type == "conversation.item.input_audio_transcription.completed":
@@ -202,28 +210,30 @@ class VoiceClientApp:
             logger.error("Event loop not available, cannot stop recording")
 
     async def _start_recording(self) -> None:
-        """Start recording and establish connection."""
+        """Start recording (connection is already established)."""
         try:
+            # Guard against starting while already recording
+            if self.is_recording or self.current_session_active:
+                logger.warning("Already recording or session active, ignoring")
+                return
+            
             self.is_recording = True
+            self.current_session_active = True
 
             # Start voice trace session
             if self.voice_trace_client:
                 await self.voice_trace_client.start_session()
 
-            # Start audio recording
+            # Start audio recording (WebRTC connection already exists)
             if self.audio_handler:
                 self.audio_handler.start_recording()
 
-            # Establish WebRTC connection
-            if self.webrtc_client:
-                await self.webrtc_client.connect()
-                self.current_session_active = True
-
-            logger.info("Recording started and connection established")
+            logger.info("Recording started (using existing WebRTC connection)")
 
         except Exception as e:
             logger.error(f"Error starting recording: {e}")
-            await self._stop_recording()
+            self.is_recording = False
+            self.current_session_active = False
 
     async def _stop_recording(self) -> None:
         """Stop recording but keep connection open for response."""
@@ -258,19 +268,19 @@ class VoiceClientApp:
             await self._close_connection()
     
     async def _close_connection(self) -> None:
-        """Close WebRTC connection after response is complete."""
+        """End current session (but keep WebRTC connection alive)."""
         try:
-            if self.webrtc_client and self.current_session_active:
-                await self.webrtc_client.cleanup()
-                self.current_session_active = False
-                logger.info("WebRTC connection closed after response")
+            # End the current session (connection stays alive for next use)
+            self.current_session_active = False
             
             # End voice trace session
             if self.voice_trace_client:
                 await self.voice_trace_client.end_session()
+            
+            logger.info("Session ended (WebRTC connection remains open for next use)")
                 
         except Exception as e:
-            logger.error(f"Error closing connection: {e}")
+            logger.error(f"Error ending session: {e}")
 
     async def run(self) -> None:
         """Run the application main loop."""
@@ -302,12 +312,14 @@ class VoiceClientApp:
                 if self.audio_handler:
                     self.audio_handler.stop_recording()
 
-            # Close connection and end voice trace
+            # End current session
             if self.current_session_active:
                 await self._close_connection()
-            elif self.webrtc_client:
-                # If connection exists but wasn't active, just cleanup
+            
+            # Now close the persistent WebRTC connection
+            if self.webrtc_client:
                 await self.webrtc_client.cleanup()
+                logger.info("WebRTC connection closed")
 
             # Clean up components
             if self.audio_handler:

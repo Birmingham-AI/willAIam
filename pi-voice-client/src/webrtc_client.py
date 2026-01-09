@@ -9,9 +9,11 @@ import json
 import asyncio
 import struct
 import time
+from math import gcd
 import numpy as np
 from typing import Optional, Callable
 import httpx
+from scipy import signal
 from aiortc import RTCPeerConnection, RTCSessionDescription, MediaStreamTrack
 from av import AudioFrame as AVAudioFrame
 from .config import config
@@ -162,6 +164,20 @@ class WebRTCClient:
     async def connect(self) -> None:
         """Establish WebRTC connection to OpenAI Realtime API."""
         try:
+            # Ensure clean state before starting new connection
+            # Cancel any existing audio receive task from previous connection
+            if self.audio_receive_task:
+                logger.warning("Found existing audio_receive_task, cancelling before new connection")
+                self.audio_receive_task.cancel()
+                try:
+                    await self.audio_receive_task
+                except (asyncio.CancelledError, Exception):
+                    pass
+                self.audio_receive_task = None
+            
+            # Reset connection state
+            self.is_connected = False
+            
             # Get ephemeral token
             self.ephemeral_key = await self.get_ephemeral_token()
 
@@ -181,10 +197,16 @@ class WebRTCClient:
             def on_track(track: MediaStreamTrack):
                 logger.info(f"Received track: {track.kind}, id: {track.id}")
                 if track.kind == "audio":
-                    logger.info("Starting audio receive task")
-                    self.audio_receive_task = asyncio.create_task(
-                        self._handle_incoming_audio(track)
-                    )
+                    # Only start audio receive task if connection is established and task doesn't exist
+                    if self.is_connected and not self.audio_receive_task:
+                        logger.info("Starting audio receive task")
+                        self.audio_receive_task = asyncio.create_task(
+                            self._handle_incoming_audio(track)
+                        )
+                    elif self.audio_receive_task:
+                        logger.warning("Audio receive task already exists, ignoring new track")
+                    else:
+                        logger.warning("Connection not yet established, will start audio handler after connection")
                 else:
                     logger.warning(f"Received non-audio track: {track.kind}")
 
@@ -218,8 +240,12 @@ class WebRTCClient:
                     RTCSessionDescription(sdp=answer_sdp, type="answer")
                 )
 
+            # Set connection state before checking for tracks
             self.is_connected = True
             logger.info("WebRTC connection established")
+            
+            # Wait a brief moment for tracks to be established
+            await asyncio.sleep(0.1)
             
             # Check for existing tracks (they might be available immediately)
             receivers = self.peer_connection.getReceivers()
@@ -259,52 +285,316 @@ class WebRTCClient:
         try:
             frame_count = 0
             timeout_count = 0
+            first_frame_timeout = 5.0  # Wait up to 5 seconds for first frame
+            subsequent_timeout = 1.0  # 1 second timeout for subsequent frames
+            
+            # Wait for connection to be fully established
+            if not self.is_connected:
+                logger.warning("Connection not yet established, waiting...")
+                wait_count = 0
+                while not self.is_connected and wait_count < 10:
+                    await asyncio.sleep(0.1)
+                    wait_count += 1
+                if not self.is_connected:
+                    logger.error("Connection not established after waiting, exiting audio handler")
+                    return
+            
             while self.is_connected:
                 try:
+                    # Use longer timeout for first frame (audio may take time to start)
+                    timeout = first_frame_timeout if frame_count == 0 else subsequent_timeout
                     # Wait for frame with timeout to allow checking connection status
-                    frame = await asyncio.wait_for(track.recv(), timeout=1.0)
+                    frame = await asyncio.wait_for(track.recv(), timeout=timeout)
                     timeout_count = 0  # Reset timeout counter on successful receive
+                    first_frame_timeout = subsequent_timeout  # Use shorter timeout after first frame
                     
                     if frame:
                         frame_count += 1
                         if frame_count == 1:
-                            logger.info(f"Received first audio frame from OpenAI: {frame.sample_rate}Hz, {frame.samples} samples")
-                        elif frame_count % 50 == 0:  # Log every 50 frames
+                            logger.info(
+                                f"Received first audio frame from OpenAI: "
+                                f"sample_rate={frame.sample_rate}Hz, "
+                                f"samples={frame.samples}, "
+                                f"format={frame.format}, "
+                                f"layout={frame.layout}"
+                            )
+                            logger.info(
+                                f"Output stream configured for: {config.AUDIO_SAMPLE_RATE}Hz, "
+                                f"channels: {config.AUDIO_CHANNELS}"
+                            )
+                            # Check for sample rate mismatch
+                            if frame.sample_rate != config.AUDIO_SAMPLE_RATE:
+                                logger.warning(
+                                    f"Sample rate mismatch detected! "
+                                    f"Incoming: {frame.sample_rate}Hz, "
+                                    f"Output configured: {config.AUDIO_SAMPLE_RATE}Hz. "
+                                    f"Will resample to match output rate."
+                                )
+                            else:
+                                logger.info("Sample rates match - no resampling needed")
+                        elif frame_count % 250 == 0:  # Log every 250 frames (less verbose)
                             logger.info(f"Received {frame_count} audio frames from OpenAI")
                         
                         if self.on_audio_received:
-                            # Convert AudioFrame to bytes (PCM 16-bit)
-                            # frame is an av.AudioFrame
-                            import numpy as np
+                            try:
+                                # Convert AudioFrame to bytes (PCM 16-bit)
+                                # frame is an av.AudioFrame
+                                import numpy as np
 
-                            # Convert to numpy array
-                            array = frame.to_ndarray()
-                            logger.debug(f"Frame array shape: {array.shape}, dtype: {array.dtype}")
+                                # Convert to numpy array
+                                # PyAV's to_ndarray() returns the data in the frame's native format
+                                array = frame.to_ndarray()
+                                
+                                # Check and convert data type if needed
+                                if array.dtype == np.float32 or array.dtype == np.float64:
+                                    # Float audio is normalized -1.0 to 1.0, convert to int16
+                                    array = (np.clip(array, -1.0, 1.0) * 32767).astype(np.int16)
+                                    if frame_count == 1:
+                                        logger.info(f"Converted float{array.dtype.itemsize * 8} to int16")
+                                elif array.dtype != np.int16:
+                                    # Other format - try to convert directly
+                                    logger.warning(f"Unexpected audio dtype {array.dtype}, converting to int16")
+                                    array = array.astype(np.int16)
+                                
+                                # Get frame layout information
+                                is_stereo = False
+                                num_channels = 1
+                                try:
+                                    if hasattr(frame.layout, 'name'):
+                                        is_stereo = frame.layout.name == 'stereo'
+                                    if hasattr(frame.layout, 'channels'):
+                                        num_channels = len(frame.layout.channels)
+                                    elif hasattr(frame.layout, 'channel_count'):
+                                        num_channels = frame.layout.channel_count
+                                except:
+                                    pass
+                                
+                                # Log frame properties
+                                if frame_count == 1:
+                                    logger.info(
+                                        f"Frame: layout={frame.layout}, is_stereo={is_stereo}, "
+                                        f"num_channels={num_channels}, frame.samples={frame.samples}, "
+                                        f"array_shape={array.shape}, dtype={array.dtype}, "
+                                        f"min={array.min()}, max={array.max()}"
+                                    )
+                                
+                                # Reshape array if needed
+                                # PyAV should return (channels, samples) for planar format
+                                # But sometimes it returns (1, total_samples) for interleaved
+                                if is_stereo and len(array.shape) == 2 and array.shape[0] == 1:
+                                    # Likely interleaved stereo in shape (1, total_samples)
+                                    # Reshape to planar: (2, samples_per_channel)
+                                    total_samples = array.shape[1]
+                                    samples_per_channel = total_samples // 2
+                                    if total_samples == frame.samples * 2:
+                                        # Reshape to planar format
+                                        array = array.reshape(2, samples_per_channel)
+                                        if frame_count == 1:
+                                            logger.info(
+                                                f"Reshaped interleaved stereo: (1, {total_samples}) -> (2, {samples_per_channel})"
+                                            )
+                                    elif frame_count == 1:
+                                        logger.warning(
+                                            f"Unexpected array shape for stereo: {array.shape}, "
+                                            f"frame.samples={frame.samples}"
+                                        )
 
-                            # Convert to 16-bit PCM bytes
-                            # array shape: (channels, samples) or (samples,)
-                            if len(array.shape) == 2:
-                                # Multi-channel: take first channel or mix
-                                audio_data = array[0].astype(np.int16).tobytes()
-                            else:
-                                # Mono
-                                audio_data = array.astype(np.int16).tobytes()
+                                # Handle different data types and channel layouts
+                                if array.dtype == np.float32 or array.dtype == np.float64:
+                                    # Normalized float audio (-1.0 to 1.0), scale to int16
+                                    # Clip values to prevent overflow
+                                    array = np.clip(array, -1.0, 1.0)
+                                    
+                                    # Convert stereo to mono if needed
+                                    if is_stereo and config.AUDIO_CHANNELS == 1:
+                                        if len(array.shape) == 2 and array.shape[0] == 2:
+                                            # Planar stereo (2, samples): average channels
+                                            audio_array = ((array[0] + array[1]) / 2.0 * 32767).astype(np.int16)
+                                        elif len(array.shape) == 1:
+                                            # Interleaved stereo: take every other sample (left channel)
+                                            audio_array = (array[::2] * 32767).astype(np.int16)
+                                        else:
+                                            # Unknown format, take first channel
+                                            audio_array = (array[0] * 32767).astype(np.int16)
+                                    elif len(array.shape) == 2:
+                                        # Multi-channel: take first channel
+                                        audio_array = (array[0] * 32767).astype(np.int16)
+                                    else:
+                                        # Mono
+                                        audio_array = (array * 32767).astype(np.int16)
+                                    
+                                    if frame_count == 1:
+                                        logger.info(f"Converted float32 audio to int16 (shape: {audio_array.shape})")
+                                elif array.dtype == np.int16:
+                                    # Already int16, use directly
+                                    
+                                    # Convert stereo to mono if needed
+                                    if is_stereo and config.AUDIO_CHANNELS == 1:
+                                        if len(array.shape) == 2 and array.shape[0] == 2:
+                                            # Planar stereo (2, samples): average channels for better quality
+                                            audio_array = ((array[0].astype(np.int32) + array[1].astype(np.int32)) // 2).astype(np.int16)
+                                            if frame_count == 1:
+                                                logger.info(
+                                                    f"Converted planar stereo to mono (averaged): "
+                                                    f"{array.shape[1]} samples per channel -> {len(audio_array)} samples"
+                                                )
+                                        elif len(array.shape) == 1:
+                                            # 1D array - interleaved stereo
+                                            if len(array) == frame.samples * 2:
+                                                # Interleaved: take left channel (every other sample starting at 0)
+                                                audio_array = array[::2]
+                                                if frame_count == 1:
+                                                    logger.info(
+                                                        f"De-interleaved 1D stereo: {len(array)} samples -> {len(audio_array)} samples"
+                                                    )
+                                            else:
+                                                # Already mono or unexpected
+                                                audio_array = array
+                                                if frame_count == 1:
+                                                    logger.warning(
+                                                        f"Unexpected 1D array length: {len(array)}, "
+                                                        f"expected {frame.samples * 2} for stereo"
+                                                    )
+                                        else:
+                                            # Fallback: flatten and take first channel worth of samples
+                                            logger.warning(f"Unexpected array shape {array.shape} for stereo, using fallback")
+                                            flat = array.flatten()
+                                            audio_array = flat[:frame.samples] if len(flat) >= frame.samples else flat
+                                    elif len(array.shape) == 2:
+                                        # Multi-channel: take first channel
+                                        audio_array = array[0]
+                                    else:
+                                        # Mono
+                                        audio_array = array
+                                    
+                                    if frame_count == 1:
+                                        logger.info(
+                                            f"Final audio array: shape={audio_array.shape}, "
+                                            f"length={len(audio_array)}, min={audio_array.min()}, "
+                                            f"max={audio_array.max()}, samples={frame.samples}"
+                                        )
+                                else:
+                                    # Try to convert to int16
+                                    logger.warning(f"Unexpected dtype {array.dtype}, attempting conversion to int16")
+                                    if is_stereo and config.AUDIO_CHANNELS == 1:
+                                        if len(array.shape) == 2 and array.shape[0] == 2:
+                                            audio_array = ((array[0].astype(np.int32) + array[1].astype(np.int32)) // 2).astype(np.int16)
+                                        elif len(array.shape) == 1:
+                                            audio_array = array[::2].astype(np.int16)
+                                        else:
+                                            audio_array = array[0].astype(np.int16) if len(array.shape) == 2 else array.astype(np.int16)
+                                    elif len(array.shape) == 2:
+                                        audio_array = array[0].astype(np.int16)
+                                    else:
+                                        audio_array = array.astype(np.int16)
 
-                            logger.debug(f"Converted to {len(audio_data)} bytes of PCM audio")
-                            self.on_audio_received(audio_data)
+                                # Resample if sample rate mismatch
+                                if frame.sample_rate != config.AUDIO_SAMPLE_RATE:
+                                    original_samples = len(audio_array)
+                                    target_rate = config.AUDIO_SAMPLE_RATE
+                                    source_rate = frame.sample_rate
+                                    
+                                    # Use resample_poly for better real-time performance and quality
+                                    # Calculate the up/down ratio using GCD for simplest ratio
+                                    g = gcd(int(target_rate), int(source_rate))
+                                    up = int(target_rate // g)
+                                    down = int(source_rate // g)
+                                    
+                                    if frame_count == 1:
+                                        logger.info(
+                                            f"Resampling: {source_rate}Hz -> {target_rate}Hz "
+                                            f"(ratio {up}:{down}, {original_samples} samples -> "
+                                        )
+                                    
+                                    # Resample using polyphase method (better for real-time)
+                                    audio_array = signal.resample_poly(audio_array, up, down).astype(np.int16)
+                                    
+                                    if frame_count == 1:
+                                        logger.info(
+                                            f"Resampled audio: {original_samples} -> {len(audio_array)} samples"
+                                        )
+                                else:
+                                    if frame_count == 1:
+                                        logger.info(
+                                            f"No resampling needed: frame rate {frame.sample_rate}Hz matches output rate {config.AUDIO_SAMPLE_RATE}Hz"
+                                        )
+                                
+                                # Convert to bytes
+                                audio_data = audio_array.tobytes()
+                                
+                                # Check audio quality periodically (not just first frame)
+                                if frame_count == 1:
+                                    # Check if audio contains actual sound
+                                    non_zero_samples = np.count_nonzero(audio_array)
+                                    max_amplitude = np.abs(audio_array).max()
+                                    # Only log if there's actual audio content (skip silence)
+                                    if non_zero_samples > 0 or max_amplitude > 0:
+                                        logger.info(
+                                            f"First frame: {len(audio_data)} bytes, "
+                                            f"non-zero: {non_zero_samples}/{len(audio_array)}, "
+                                            f"max_amp: {max_amplitude}"
+                                        )
+                                    else:
+                                        logger.warning("First audio frame is all zeros (silence) - OpenAI may not have generated response")
+                                    
+                                    if max_amplitude > 0 and max_amplitude < 100:
+                                        logger.warning(f"Audio amplitude very low (max: {max_amplitude})")
+                                elif frame_count == 10:
+                                    # Check 10th frame to verify audio is actually coming through
+                                    non_zero_samples = np.count_nonzero(audio_array)
+                                    max_amplitude = np.abs(audio_array).max()
+                                    if non_zero_samples == 0:
+                                        logger.error("ERROR: 10th frame is still all zeros - no audio received!")
+                                    elif max_amplitude < 100:
+                                        logger.warning(f"10th frame amplitude still low (max: {max_amplitude})")
+                                    else:
+                                        logger.info(f"10th frame has audio: max_amp={max_amplitude}, non_zero={non_zero_samples}/{len(audio_array)}")
+                                
+                                self.on_audio_received(audio_data)
+                            except Exception as e:
+                                logger.error(f"Error processing audio frame {frame_count}: {e}", exc_info=True)
                         else:
                             logger.warning("on_audio_received callback not set")
                     else:
                         logger.debug("Received None frame from track")
                 except asyncio.TimeoutError:
                     timeout_count += 1
-                    if timeout_count % 10 == 0:  # Log every 10 timeouts
-                        logger.debug(f"No audio frames received for {timeout_count} seconds (connection: {self.is_connected})")
+                    # Wait longer before giving up - audio might still be coming
+                    max_timeouts = 10 if frame_count == 0 else 5  # Changed from 3 to 5
+                    
+                    if timeout_count >= max_timeouts:
+                        if frame_count == 0:
+                            logger.error(
+                                f"No audio frames received after {timeout_count * timeout:.1f} seconds. "
+                                f"Connection: {self.is_connected}. Exiting handler."
+                            )
+                        else:
+                            logger.info(
+                                f"No audio frames for {timeout_count} seconds after {frame_count} frames. "
+                                f"Stream complete. Exiting handler."
+                            )
+                        break
+                    
+                    # Log periodically, more frequently for first frame wait
+                    log_interval = 5 if frame_count == 0 else 10
+                    if timeout_count % log_interval == 0:
+                        logger.debug(
+                            f"No audio frames received for {timeout_count * timeout:.1f} seconds "
+                            f"(connection: {self.is_connected}, frames received: {frame_count})"
+                        )
                     continue
         except asyncio.CancelledError:
             logger.info("Audio receive handler cancelled")
         except Exception as e:
             logger.error(f"Error handling incoming audio: {e}", exc_info=True)
+        finally:
+            if frame_count == 0:
+                logger.warning(
+                    f"Audio receive handler finished without processing any frames. "
+                    f"Connection state: {self.is_connected}"
+                )
+            else:
+                logger.info(f"Audio receive handler finished after processing {frame_count} frames")
 
     def _handle_data_channel_message(self, message: str) -> None:
         """
@@ -352,33 +642,42 @@ class WebRTCClient:
     async def cleanup(self) -> None:
         """Clean up WebRTC connection."""
         try:
+            # Set connection state to False FIRST to stop handlers
             self.is_connected = False
-
-            # Cancel audio receive task
+            
+            # Cancel and cleanup audio receive task immediately
             if self.audio_receive_task:
-                self.audio_receive_task.cancel()
-                try:
-                    await self.audio_receive_task
-                except asyncio.CancelledError:
-                    pass
+                if not self.audio_receive_task.done():
+                    self.audio_receive_task.cancel()
+                    # Don't wait for it - just cancel and move on
                 self.audio_receive_task = None
-
+            
+            # Close data channel
             if self.data_channel:
-                self.data_channel.close()
+                try:
+                    self.data_channel.close()
+                except:
+                    pass
                 self.data_channel = None
-
+            
+            # Stop microphone track
             if self.microphone_track:
                 self.microphone_track._started = False
-
+                self.microphone_track = None
+            
+            # Close peer connection
             if self.peer_connection:
-                await self.peer_connection.close()
+                try:
+                    await asyncio.wait_for(self.peer_connection.close(), timeout=2.0)
+                except asyncio.TimeoutError:
+                    logger.warning("Peer connection close timed out")
+                except Exception as e:
+                    logger.debug(f"Error closing peer connection: {e}")
                 self.peer_connection = None
-
-            self.microphone_track = None
+            
             self.ephemeral_key = None
-
             logger.info("WebRTC connection cleaned up")
-
+            
         except Exception as e:
             logger.error(f"Error cleaning up WebRTC connection: {e}")
 

@@ -24,7 +24,7 @@ class Config:
     BUTTON_GPIO_PIN: int = int(os.getenv("BUTTON_GPIO_PIN", "18"))
 
     # Audio Configuration
-    AUDIO_SAMPLE_RATE: int = int(os.getenv("AUDIO_SAMPLE_RATE", "24000"))
+    AUDIO_SAMPLE_RATE: int = int(os.getenv("AUDIO_SAMPLE_RATE", "48000"))  # Changed from 24000 to match USB device and OpenAI
     AUDIO_CHANNELS: int = int(os.getenv("AUDIO_CHANNELS", "1"))
     AUDIO_CHUNK_SIZE: int = int(os.getenv("AUDIO_CHUNK_SIZE", "480"))
 

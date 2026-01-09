@@ -11,6 +11,7 @@ import threading
 import os
 from pathlib import Path
 from typing import Optional, Callable
+import numpy as np
 from .config import config
 
 logger = logging.getLogger(__name__)
@@ -59,6 +60,11 @@ class AudioHandler:
         self.playback_queue: queue.Queue = queue.Queue()
         self.is_playing = False
         self.playback_thread: Optional[threading.Thread] = None
+        
+        # Track consecutive empty callbacks for auto-stop
+        self.empty_callback_count = 0
+        self.max_empty_callbacks = 3000  # ~30 seconds at 100 callbacks/sec (adjust based on chunk_size)
+        self.write_count = 0  # Track number of audio chunks written
 
         # Detect and set USB audio device for output
         self._detect_usb_audio_device()
@@ -286,6 +292,111 @@ class AudioHandler:
 
         return (None, pyaudio.paContinue)
 
+    def _output_callback(
+        self, 
+        in_data: bytes,  # Not used for output, but required by PyAudio signature
+        frame_count: int, 
+        time_info: dict, 
+        status: int
+    ) -> tuple[Optional[bytes], int]:
+        """
+        Callback for audio output stream.
+        
+        Args:
+            in_data: Not used for output streams, but required by PyAudio signature
+            frame_count: Number of frames requested
+            time_info: Timing information
+            status: Status flags
+            
+        Returns:
+            Tuple of (audio_data_bytes, pyaudio.paContinue or pyaudio.paComplete)
+        """
+        if status:
+            logger.warning(f"Audio output status: {status}")
+        
+        # Calculate required bytes
+        bytes_needed = frame_count * self.channels * self.format_width
+        
+        try:
+            # Try to get audio data from queue (non-blocking)
+            audio_data = self.playback_queue.get_nowait()
+            self.empty_callback_count = 0  # Reset empty counter on successful get
+            
+            # Log first few chunks with audio analysis
+            if self.write_count < 10:
+                import numpy as np
+                audio_array = np.frombuffer(audio_data, dtype=np.int16)
+                non_zero = np.count_nonzero(audio_array)
+                max_amp = np.abs(audio_array).max() if len(audio_array) > 0 else 0
+                logger.info(
+                    f"Callback playing chunk {self.write_count + 1}: {len(audio_data)} bytes, "
+                    f"non-zero={non_zero}/{len(audio_array)}, max_amp={max_amp}"
+                )
+            
+            # Verify audio data size matches what we need
+            if len(audio_data) != bytes_needed:
+                # This should rarely happen now that play_audio() splits chunks, but handle gracefully
+                if len(audio_data) < bytes_needed:
+                    # Pad with silence if too small
+                    logger.debug(
+                        f"Audio chunk smaller than expected: got {len(audio_data)} bytes, "
+                        f"expected {bytes_needed} bytes. Padding with silence."
+                    )
+                    audio_data += b'\x00' * (bytes_needed - len(audio_data))
+                else:
+                    # If larger, split it: use what we need and queue the remainder
+                    remainder = audio_data[bytes_needed:]
+                    audio_data = audio_data[:bytes_needed]
+                    if len(remainder) > 0:
+                        # Queue the remainder for next callback
+                        self.playback_queue.put(remainder)
+                        logger.debug(
+                            f"Audio chunk larger than expected: split into {bytes_needed} bytes "
+                            f"and queued {len(remainder)} bytes remainder"
+                        )
+            
+            self.write_count += 1
+            # Only log every 100 chunks to reduce verbosity
+            if self.write_count % 100 == 0:
+                queue_size = self.playback_queue.qsize()
+                logger.info(
+                    f"Callback: played {self.write_count} chunks, queue_size={queue_size}"
+                )
+            
+            return (audio_data, pyaudio.paContinue)
+            
+        except queue.Empty:
+            # Queue is empty - generate silence to keep stream alive
+            self.empty_callback_count += 1
+            
+            # Log periodically for debugging (less frequently)
+            if self.empty_callback_count % 1000 == 0:
+                logger.debug(
+                    f"Callback: queue empty (count: {self.empty_callback_count}/{self.max_empty_callbacks})"
+                )
+            
+            # Generate silence bytes
+            silence = b'\x00' * bytes_needed
+            
+            # Stop stream if queue has been empty for too long AND we've written some data
+            # This allows initial silence but stops after extended empty period
+            if self.empty_callback_count >= self.max_empty_callbacks and self.write_count > 0:
+                logger.info(
+                    f"Output callback: queue empty for {self.max_empty_callbacks} callbacks "
+                    f"after writing {self.write_count} chunks. Stopping stream."
+                )
+                self.is_playing = False
+                return (None, pyaudio.paComplete)
+            
+            # Return silence to keep stream alive
+            return (silence, pyaudio.paContinue)
+            
+        except Exception as e:
+            logger.error(f"Error in output callback: {e}", exc_info=True)
+            # Return silence on error to prevent stream from stopping abruptly
+            silence = b'\x00' * bytes_needed
+            return (silence, pyaudio.paContinue)
+
     def play_audio(self, audio_data: bytes) -> None:
         """
         Queue audio data for playback.
@@ -293,15 +404,65 @@ class AudioHandler:
         Args:
             audio_data: Audio data to play (PCM format)
         """
-        self.playback_queue.put(audio_data)
-        logger.debug(f"Queued {len(audio_data)} bytes for playback")
+        if not audio_data:
+            logger.warning("Attempted to queue empty audio data")
+            return
+        
+        # Calculate expected chunk size based on stream configuration
+        # This matches what the callback expects: chunk_size frames × channels × bytes per sample
+        expected_chunk_size = self.chunk_size * self.channels * self.format_width
+        
+        # Validate: expected is 480 * 1 * 2 = 960 bytes at 48000Hz
+        if expected_chunk_size != 960:
+            logger.warning(
+                f"Expected chunk size is {expected_chunk_size}, not 960! "
+                f"Check config: chunk_size={self.chunk_size}, "
+                f"channels={self.channels}, format_width={self.format_width}"
+            )
+        
+        # Check if audio contains actual sound (not just silence)
+        import numpy as np
+        audio_array = np.frombuffer(audio_data, dtype=np.int16)
+        non_zero_samples = np.count_nonzero(audio_array)
+        max_amplitude = np.abs(audio_array).max() if len(audio_array) > 0 else 0
+        
+        # Split large chunks into callback-sized chunks
+        # This handles cases where WebRTC sends larger chunks than the callback expects
+        offset = 0
+        chunks_queued = 0
+        while offset < len(audio_data):
+            chunk = audio_data[offset:offset + expected_chunk_size]
+            if len(chunk) > 0:
+                self.playback_queue.put(chunk)
+                chunks_queued += 1
+                offset += len(chunk)
+            else:
+                break
+        
+        queue_size = self.playback_queue.qsize()
+        # Only log audio characteristics for non-silence chunks (or if queue is large)
+        # This reduces log spam from silence
+        if non_zero_samples > 0 or max_amplitude > 0:
+            # Has actual audio content - log it
+            if chunks_queued > 1:
+                logger.info(
+                    f"Queued {len(audio_data)} bytes ({chunks_queued} chunks): "
+                    f"non-zero={non_zero_samples}/{len(audio_array)}, "
+                    f"max_amp={max_amplitude}, queue_size={queue_size}"
+                )
+            else:
+                logger.debug(f"Queued {len(audio_data)} bytes ({chunks_queued} chunks, queue_size={queue_size})")
+        elif queue_size > 20:
+            # Queue getting large, even with silence - log warning
+            logger.warning(f"Queued silence, but queue_size is high: {queue_size}")
 
-        # Start playback thread if not already running
+        # Start playback if not already playing
         if not self.is_playing:
+            logger.info("Starting playback (was not playing)")
             self._start_playback()
 
     def _start_playback(self) -> None:
-        """Start playback thread."""
+        """Start playback using callback-based streaming."""
         if self.is_playing:
             return
 
@@ -313,49 +474,82 @@ class AudioHandler:
                 "rate": self.sample_rate,
                 "output": True,
                 "frames_per_buffer": self.chunk_size,
+                "stream_callback": self._output_callback,
             }
             
             # Use USB audio device if detected
             if self.output_device_index is not None:
                 stream_kwargs["output_device_index"] = self.output_device_index
                 device_info = self.audio.get_device_info_by_index(self.output_device_index)
-                logger.debug(f"Opening output stream on USB device: {device_info['name']}")
+                logger.info(
+                    f"Opening output stream on USB device: {device_info['name']} "
+                    f"(index {self.output_device_index}, rate: {self.sample_rate}Hz, "
+                    f"channels: {self.channels}, format: {self.format})"
+                )
+            else:
+                default_output = self.audio.get_default_output_device_info()
+                logger.info(
+                    f"Opening output stream on default device: {default_output['name']} "
+                    f"(rate: {self.sample_rate}Hz, channels: {self.channels})"
+                )
+            
+            logger.info(
+                f"Config AUDIO_SAMPLE_RATE: {config.AUDIO_SAMPLE_RATE}Hz, "
+                f"self.sample_rate: {self.sample_rate}Hz, "
+                f"stream will use: {stream_kwargs['rate']}Hz"
+            )
             
             self.output_stream = self.audio.open(**stream_kwargs)
-
-            self.is_playing = True
-            self.playback_thread = threading.Thread(
-                target=self._playback_worker, daemon=True
+            
+            # Start the stream explicitly
+            self.output_stream.start_stream()
+            logger.info(f"Output stream started, active: {self.output_stream.is_active()}")
+            
+            # Get the actual stream parameters to verify
+            try:
+                # PyAudio streams don't expose rate directly, but we can check the device
+                device_index = stream_kwargs.get("output_device_index")
+                if device_index is not None:
+                    device_info = self.audio.get_device_info_by_index(device_index)
+                    device_rate = int(device_info.get('defaultSampleRate', 0))
+                    logger.info(
+                        f"Output stream opened: requested={self.sample_rate}Hz, "
+                        f"device default={device_rate}Hz, active={self.output_stream.is_active()}"
+                    )
+                    if device_rate > 0 and abs(device_rate - self.sample_rate) > 100:
+                        logger.warning(
+                            f"Device default rate ({device_rate}Hz) differs significantly from "
+                            f"requested rate ({self.sample_rate}Hz). Audio may play at wrong speed!"
+                        )
+                else:
+                    default_output = self.audio.get_default_output_device_info()
+                    device_rate = int(default_output.get('defaultSampleRate', 0))
+                    logger.info(
+                        f"Output stream opened: requested={self.sample_rate}Hz, "
+                        f"device default={device_rate}Hz, active={self.output_stream.is_active()}"
+                    )
+                    if device_rate > 0 and abs(device_rate - self.sample_rate) > 100:
+                        logger.warning(
+                            f"Device default rate ({device_rate}Hz) differs significantly from "
+                            f"requested rate ({self.sample_rate}Hz). Audio may play at wrong speed!"
+                        )
+            except Exception as e:
+                logger.warning(f"Could not verify stream rate: {e}")
+            logger.info(
+                f"Output stream opened successfully, active: {self.output_stream.is_active()}"
             )
-            self.playback_thread.start()
-            logger.info("Started playback")
+
+            # Reset callback tracking counters
+            self.empty_callback_count = 0
+            self.write_count = 0
+            
+            self.is_playing = True
+            logger.info("Started playback (callback-based)")
 
         except Exception as e:
             logger.error(f"Failed to start playback: {e}")
             self.is_playing = False
             raise
-
-    def _playback_worker(self) -> None:
-        """Worker thread for audio playback."""
-        try:
-            while self.is_playing:
-                try:
-                    # Get audio data from queue (with timeout)
-                    audio_data = self.playback_queue.get(timeout=0.1)
-
-                    if self.output_stream and audio_data:
-                        self.output_stream.write(audio_data)
-
-                except queue.Empty:
-                    # Check if we should continue (queue might be empty temporarily)
-                    continue
-                except Exception as e:
-                    logger.error(f"Error during playback: {e}")
-
-        except Exception as e:
-            logger.error(f"Playback worker error: {e}")
-        finally:
-            self._stop_playback()
 
     def stop_playback(self) -> None:
         """Stop playback and clear queue."""
@@ -369,6 +563,10 @@ class AudioHandler:
                 self.output_stream.stop_stream()
                 self.output_stream.close()
                 self.output_stream = None
+
+            # Reset callback tracking counters
+            self.empty_callback_count = 0
+            self.write_count = 0
 
             # Clear queue
             while not self.playback_queue.empty():
@@ -402,6 +600,51 @@ class AudioHandler:
                 f"(inputs: {info['maxInputChannels']}, "
                 f"outputs: {info['maxOutputChannels']})"
             )
+
+    def test_playback(self, duration_seconds: float = 1.0, frequency: int = 440) -> bool:
+        """
+        Test playback by generating and playing a test tone.
+        
+        Args:
+            duration_seconds: Duration of test tone in seconds
+            frequency: Frequency of test tone in Hz (default: 440Hz = A4)
+            
+        Returns:
+            True if test tone was played successfully, False otherwise
+        """
+        try:
+            logger.info(f"Testing playback with {frequency}Hz tone for {duration_seconds} seconds")
+            
+            # Generate test tone
+            sample_rate = self.sample_rate
+            num_samples = int(sample_rate * duration_seconds)
+            t = np.linspace(0, duration_seconds, num_samples, False)
+            tone = np.sin(2 * np.pi * frequency * t)
+            
+            # Convert to int16 PCM
+            tone_int16 = (tone * 32767 * 0.5).astype(np.int16)  # 50% volume
+            tone_bytes = tone_int16.tobytes()
+            
+            # Play the tone using play_audio (callback will handle it)
+            if not self.is_playing:
+                self._start_playback()
+            
+            # Wait a bit for stream to start
+            import time
+            time.sleep(0.1)
+            
+            # Queue the test tone - callback will play it automatically
+            self.play_audio(tone_bytes)
+            
+            # Wait for playback to complete (approximate)
+            time.sleep(duration_seconds + 0.1)
+            
+            logger.info("Test tone queued for playback")
+            return True
+                
+        except Exception as e:
+            logger.error(f"Error testing playback: {e}", exc_info=True)
+            return False
 
     def cleanup(self) -> None:
         """Clean up audio resources."""
