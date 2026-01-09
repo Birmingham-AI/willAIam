@@ -24,13 +24,19 @@ class Config:
     BUTTON_GPIO_PIN: int = int(os.getenv("BUTTON_GPIO_PIN", "18"))
 
     # Audio Configuration
-    AUDIO_SAMPLE_RATE: int = int(os.getenv("AUDIO_SAMPLE_RATE", "48000"))  # Changed from 24000 to match USB device and OpenAI
+    # AUDIO_SAMPLE_RATE: Playback sample rate (must be supported by your USB device)
+    # OpenAI sends 96kHz audio which is automatically resampled to match this rate
+    AUDIO_SAMPLE_RATE: int = int(os.getenv("AUDIO_SAMPLE_RATE", "48000"))
     AUDIO_CHANNELS: int = int(os.getenv("AUDIO_CHANNELS", "1"))
     AUDIO_CHUNK_SIZE: int = int(os.getenv("AUDIO_CHUNK_SIZE", "480"))
 
     # Audio format (OpenAI Realtime API requirements)
     AUDIO_FORMAT_BITS: int = 16  # 16-bit PCM
     AUDIO_FORMAT_BYTES: int = 2  # 2 bytes per sample
+
+    # Debug Configuration
+    DEBUG_AUDIO_RECORDING: bool = os.getenv("DEBUG_AUDIO_RECORDING", "false").lower() == "true"
+    DEBUG_AUDIO_OUTPUT_DIR: str = os.getenv("DEBUG_AUDIO_OUTPUT_DIR", "/tmp/willAIam_debug")
 
     @classmethod
     def get_audio_format(cls) -> dict:
@@ -73,7 +79,9 @@ class Config:
             f"BUTTON_GPIO_PIN={cls.BUTTON_GPIO_PIN}, "
             f"AUDIO_SAMPLE_RATE={cls.AUDIO_SAMPLE_RATE}, "
             f"AUDIO_CHANNELS={cls.AUDIO_CHANNELS}, "
-            f"AUDIO_CHUNK_SIZE={cls.AUDIO_CHUNK_SIZE}"
+            f"AUDIO_CHUNK_SIZE={cls.AUDIO_CHUNK_SIZE}, "
+            f"DEBUG_AUDIO_RECORDING={cls.DEBUG_AUDIO_RECORDING}, "
+            f"DEBUG_AUDIO_OUTPUT_DIR={cls.DEBUG_AUDIO_OUTPUT_DIR}"
             f")"
         )
 

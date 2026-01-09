@@ -442,19 +442,19 @@ class AudioHandler:
         queue_size = self.playback_queue.qsize()
         # Only log audio characteristics for non-silence chunks (or if queue is large)
         # This reduces log spam from silence
-        if non_zero_samples > 0 or max_amplitude > 0:
-            # Has actual audio content - log it
-            if chunks_queued > 1:
-                logger.info(
-                    f"Queued {len(audio_data)} bytes ({chunks_queued} chunks): "
-                    f"non-zero={non_zero_samples}/{len(audio_array)}, "
-                    f"max_amp={max_amplitude}, queue_size={queue_size}"
-                )
-            else:
-                logger.debug(f"Queued {len(audio_data)} bytes ({chunks_queued} chunks, queue_size={queue_size})")
-        elif queue_size > 20:
-            # Queue getting large, even with silence - log warning
-            logger.warning(f"Queued silence, but queue_size is high: {queue_size}")
+        # if non_zero_samples > 0 or max_amplitude > 0:
+        #     # Has actual audio content - log it
+        #     if chunks_queued > 1:
+        #         logger.info(
+        #             f"Queued {len(audio_data)} bytes ({chunks_queued} chunks): "
+        #             f"non-zero={non_zero_samples}/{len(audio_array)}, "
+        #             f"max_amp={max_amplitude}, queue_size={queue_size}"
+        #         )
+        #     else:
+        #         logger.debug(f"Queued {len(audio_data)} bytes ({chunks_queued} chunks, queue_size={queue_size})")
+        # elif queue_size > 20:
+        #     # Queue getting large, even with silence - log warning
+        #     logger.warning(f"Queued silence, but queue_size is high: {queue_size}")
 
         # Start playback if not already playing
         if not self.is_playing:

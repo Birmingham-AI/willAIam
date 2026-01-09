@@ -37,7 +37,7 @@ class ButtonHandler:
         self.on_release = on_release
 
         self.is_pressed = False
-        self.last_state = GPIO.LOW
+        self.last_state = GPIO.HIGH  # Button rests at HIGH with pull-up resistor
         self.last_state_change_time = 0.0
 
         # Check if we're on Raspberry Pi hardware

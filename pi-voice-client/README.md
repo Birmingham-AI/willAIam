@@ -178,9 +178,48 @@ Edit `.env` file to customize:
 
 - `API_BASE_URL`: Backend API URL
 - `BUTTON_GPIO_PIN`: GPIO pin for button
-- `AUDIO_SAMPLE_RATE`: Audio sample rate (default: 24000 Hz)
+- `AUDIO_SAMPLE_RATE`: Audio sample rate for playback (default: 48000 Hz)
+  - Must match a rate supported by your USB audio device
+  - OpenAI sends 96kHz audio which is automatically resampled to this rate
+  - Most USB devices support 48000Hz but not 96000Hz
 - `AUDIO_CHANNELS`: Audio channels (1 = mono, 2 = stereo)
 - `AUDIO_CHUNK_SIZE`: Audio buffer size in frames
+- `DEBUG_AUDIO_RECORDING`: Enable debug audio recording (default: false)
+- `DEBUG_AUDIO_OUTPUT_DIR`: Directory for debug audio files (default: /tmp/willAIam_debug)
+
+## Debug Audio Recording
+
+To verify that audio is being received correctly, you can enable debug audio recording to save the first 10 seconds of each response to a file.
+
+### Enable Debug Recording
+
+Edit `.env` file:
+
+```bash
+DEBUG_AUDIO_RECORDING=true
+DEBUG_AUDIO_OUTPUT_DIR=/tmp/willAIam_debug
+```
+
+### Playback Saved Audio
+
+Debug audio is saved as raw PCM format. To play it back:
+
+```bash
+# The log will show the exact aplay command to use
+aplay -f S16_LE -r 48000 -c 1 /tmp/willAIam_debug/debug_audio_20260109_120000.pcm
+```
+
+Parameters:
+- `-f S16_LE`: 16-bit signed little-endian PCM
+- `-r 48000`: Sample rate (48kHz)
+- `-c 1`: Mono audio
+
+### Notes
+
+- Only the first response per session is saved (button press/release cycle)
+- Files are saved with timestamp: `debug_audio_YYYYMMDD_HHMMSS.pcm`
+- Silence-only audio is not saved (only saves if non-zero samples detected)
+- The output directory is created automatically if it doesn't exist
 
 ## Architecture
 
